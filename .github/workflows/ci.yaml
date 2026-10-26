@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - "*"
+  # Redeploys production from main, e.g. after changing a secret or variable.
+  workflow_dispatch:
+
+jobs:
+  code-quality:
+    uses: ./.github/workflows/code-quality.yaml
+
+  deploy:
+    uses: Rutger505-Org/kubernetes-infrastructure/.github/workflows/deployments.yaml@main
+    secrets: inherit
+
