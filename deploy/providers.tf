@@ -7,7 +7,7 @@ terraform {
   }
 
   backend "kubernetes" {
-    config_path = "~/.kube/config"
+    config_path   = "~/.kube/config"
     secret_suffix = var.application_name
   }
 }

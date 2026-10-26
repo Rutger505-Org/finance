@@ -8,16 +8,6 @@ variable "image" {
   type        = string
 }
 
-variable "hostname" {
-  description = "Ingress hostname"
-  type        = string
-}
-
-variable "certificate_issuer" {
-  description = "Certificate cluster issuer name. e.g. staging or production"
-  type        = string
-}
-
 variable "application_port" {
   description = "Application port"
   type        = number

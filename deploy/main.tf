@@ -1,3 +1,11 @@
+locals {
+  # Workspaces are "production" and "pr-<n>" (selected by the deploy workflow).
+  is_production = terraform.workspace == "production"
+
+  # MetalLB address (pool 192.168.178.230-250, assigned explicitly only).
+  load_balancer_ip = "192.168.178.234"
+}
+
 # Namespace
 resource "kubernetes_namespace" "app" {
   metadata {
@@ -41,7 +49,7 @@ resource "kubernetes_deployment" "app" {
     name      = "${var.application_name}-deployment"
     namespace = kubernetes_namespace.app.metadata[0].name
   }
-  
+
   timeouts {
     create = "1m"
     update = "1m"
@@ -80,39 +88,47 @@ resource "kubernetes_deployment" "app" {
         automount_service_account_token = false
 
         init_container {
-          name = "${var.application_name}-migrate-db"
+          name  = "${var.application_name}-migrate-db"
           image = var.image
           command = [
             "sh",
             "-c",
             "cd /app && bun db:migrate"
           ]
-          
+
           volume_mount {
             name       = "sqlite-data"
             mount_path = "/app/data/"
             read_only  = false
           }
         }
-        
-        
+
+
         container {
           name  = var.application_name
           image = var.image
 
           resources {
             limits = {
-              cpu    = "1000m"    # 1 CPU core
-              memory = "512Mi"   # 1GB memory
+              cpu    = "1000m" # 1 CPU core
+              memory = "512Mi" # 1GB memory
             }
             requests = {
-              cpu    = "250m"     # 0.25 CPU core
-              memory = "256Mi"    # 512MB memory
+              cpu    = "250m"  # 0.25 CPU core
+              memory = "256Mi" # 512MB memory
             }
           }
 
           port {
             container_port = var.application_port
+          }
+
+          readiness_probe {
+            http_get {
+              path = "/api/health"
+              port = var.application_port
+            }
+            period_seconds = 10
           }
 
           env_from {
@@ -180,8 +196,13 @@ resource "kubernetes_service" "app" {
   }
 
   spec {
+    # Production gets its own LAN address, which the homelab Caddy proxies
+    # finance.homelab.rutgerpronk.com to. Never an ingress: the app has no
+    # authentication and Traefik also serves the public sites.
+    load_balancer_ip = local.is_production ? local.load_balancer_ip : null
+
     selector = {
-      app =  kubernetes_deployment.app.metadata[0].name
+      app = kubernetes_deployment.app.metadata[0].name
     }
 
     port {
@@ -190,75 +211,6 @@ resource "kubernetes_service" "app" {
       protocol    = "TCP"
     }
 
-    type = "ClusterIP"
-  }
-}
-
-# Ingress
-resource "kubernetes_ingress_v1" "app" {
-  depends_on = [
-    kubernetes_namespace.app,
-    kubernetes_service.app,
-  ]
-
-  metadata {
-    name      = "${var.application_name}-ingress"
-    namespace = kubernetes_namespace.app.metadata[0].name
-  }
-
-  spec {
-    ingress_class_name = "traefik"
-
-    tls {
-      hosts       = [var.hostname]
-      secret_name = "${var.application_name}-tls"
-    }
-
-    rule {
-      host = var.hostname
-
-      http {
-        path {
-          path      = "/"
-          path_type = "Prefix"
-
-          backend {
-            service {
-              name = kubernetes_service.app.metadata[0].name
-              port {
-                number = 80
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
-# Certificate
-resource "kubernetes_manifest" "app" {
-  depends_on = [
-    kubernetes_namespace.app,
-    kubernetes_ingress_v1.app
-  ]
-
-  manifest = {
-    apiVersion = "cert-manager.io/v1"
-    kind       = "Certificate"
-    metadata = {
-      name      = "${var.application_name}-certificate"
-      namespace = kubernetes_namespace.app.metadata[0].name
-    }
-    spec = {
-      secretName   = "${var.application_name}-tls"
-      duration     = "2160h" # 90d
-      renewBefore  = "360h" # 15d
-      dnsNames     = [var.hostname]
-      issuerRef = {
-        name = var.certificate_issuer
-        kind = "ClusterIssuer"
-      }
-    }
+    type = local.is_production ? "LoadBalancer" : "ClusterIP"
   }
 }

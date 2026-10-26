@@ -5,9 +5,6 @@ on:
     branches:
       - main
   pull_request:
-    types: [opened, synchronize, reopened, closed]
-    branches:
-      - "*"
   # Redeploys production from main, e.g. after changing a secret or variable.
   workflow_dispatch:
 
@@ -15,7 +12,10 @@ jobs:
   code-quality:
     uses: ./.github/workflows/code-quality.yaml
 
+  # Production only. No PR previews: the app has no authentication and is only
+  # reachable through the homelab Caddy, which knows a single hostname.
   deploy:
+    if: github.event_name != 'pull_request'
+    needs: [code-quality]
     uses: Rutger505-Org/kubernetes-infrastructure/.github/workflows/deployments.yaml@main
     secrets: inherit
-

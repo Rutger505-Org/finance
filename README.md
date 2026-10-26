@@ -1,103 +1,49 @@
-# Next template
+# finance
 
-Next.js template for my personal needs.
+Overview of fixed costs, the transfers to the fixed-costs account and what's free to spend on the current account. Next.js + SQLite (Drizzle), no authentication: there is one user and the app is only reachable on the LAN and tailnet, at https://finance.homelab.rutgerpronk.com.
 
-## Getting started
+## What it calculates
 
-### Development
+- **Fixed-costs account, required balance:** every expense is an envelope that gets its share of each transfer. "Reserved" is the least it must hold today so it never runs short in the next two years; the target is the sum. A 28-day gym can need more than one charge, because it sometimes falls twice between two transfers.
+- **Expense account:** `fixed` is a direct debit from the fixed-costs account. `current` is paid from the current account; on the due date the reserved money moves back to the current account.
+- **Transfer:** `auto` is the average need per transfer, rounded up to whole euros; the rest builds a buffer.
+- **Free to spend:** latest current-account balance + incomes until the next payment of the main income − transfers in that period. Refunds don't count, that money is already spent on its expense.
+- **Balances:** the overview uses the latest balance per account up to that day. The fixed-costs balance is projected to today with the planned movements since then.
 
-Copy the [.env.example](.env.example) file to a new file `.env` and fill in the variables.
+Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`month`, `day`), `interval` (`days` + an `anchor` date of any known occurrence).
 
-```bash
-cp .env.example .env
+## Using it
+
+- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Posten (incomes, expenses, transfer), Saldo (balance history), JSON (the whole config as one document: copy, paste, save).
+- **API:** `/api/v1`, spec at `/api/v1/openapi.json`. Amounts are euros (max 2 decimals), dates `YYYY-MM-DD`.
+  - `GET /overview?date=&days=`
+  - `GET|PUT /config`: settings + incomes + expenses. Items with an `id` are updated, without one created, missing ones deleted. Balances are not touched.
+  - `GET|POST /incomes`, `GET|PATCH|DELETE /incomes/{id}`, same for `/expenses`
+  - `GET|PUT /settings`
+  - `GET|POST /balances` (`?account=fixed|current&limit=`), `DELETE /balances/{id}`
+
+```sh
+curl -s https://finance.homelab.rutgerpronk.com/api/v1/overview | jq
+curl -s -X POST -H 'content-type: application/json' \
+  -d '{"account":"current","amount":450}' https://finance.homelab.rutgerpronk.com/api/v1/balances
 ```
 
-Run the database migration command:
+## Development
 
-```bash
-bun db:migrate
-```
-
-Then start the development server:
-
-```bash
+```sh
+bun install
+bun db:migrate      # creates ./data/db.sqlite
 bun dev
+bun test && bun run typecheck && bun run lint
+bun db:generate     # after changing src/server/db/schema.ts
 ```
 
-### Using template
+Pure calculation code is in `src/lib/finance`, database access in `src/server/finance/repository.ts`. Validation (zod, `src/lib/finance/schemas.ts`) is shared by the API, the forms and the JSON editor.
 
-#### Variables
+## Deploy
 
-- `APPLICATION_NAME` - Used as an identifier for multiple actions such as the Kubernetes deployment name and Terraform workspace.
-- `BASE_DOMAIN` - Domain where to host the application. `main` is deployed to this domain; pull requests to `pr-<number>.<BASE_DOMAIN>`.
-- `DEPLOYMENT_AUTH_EMAIL_FROM` - Display name shown as the sender of the magic link emails (e.g. `Next Template`). The actual sender address is taken from `AUTH_EMAIL_USER`; the `From` header is composed as `AUTH_EMAIL_FROM <AUTH_EMAIL_USER>`.
+Work happens on `main`; every push deploys production through the shared workflow in `kubernetes-infrastructure`. There are no PR previews.
 
-The following variables are configured at the organisation level and are inherited automatically — no action needed per repository.
-
-- `DOCKERHUB_USERNAME` - Docker Hub username for pushing images.
-
-#### Secrets
-
-The following secrets must be configured per repository.
-
-- `DEPLOYMENT_AUTH_SECRET` - Better Auth secret for encrypting JWTs (generate with `bunx auth secret --raw`).
-- `DEPLOYMENT_DISCORD_WEBHOOK_URL` - Discord webhook URL for in-application alerts.
-
-The following secrets are configured at the organisation level and are inherited automatically — no action needed per repository.
-
-- `KUBECONFIG` - Kubernetes cluster config for deploying to the cluster.
-- `TAILSCALE_OAUTH_CLIENT_ID` - Tailscale OAuth client ID used to connect the CI runner to the private cluster network.
-- `TAILSCALE_OAUTH_SECRET` - Tailscale OAuth secret paired with the client ID above.
-- `DOCKERHUB_TOKEN` - Docker Hub access token.
-- `DEPLOYMENT_AUTH_EMAIL_HOST` - SMTP host (e.g. `smtp.gmail.com`).
-- `DEPLOYMENT_AUTH_EMAIL_PORT` - SMTP port (e.g. `465`).
-- `DEPLOYMENT_AUTH_EMAIL_USER` - SMTP username (for Gmail, this is your email address).
-- `DEPLOYMENT_AUTH_EMAIL_PASSWORD` - SMTP password (for Gmail, use an App Password).
-
-To use a different mail server in a repository, override these as repository **secrets** with the same name. A repository variable won't work: the organisation secret takes precedence over it (see [Deployments](#deployments)).
-
-## Deployments
-
-To pass additional environment variables to the running container, create a GitHub variable or secret and prefix the name with `DEPLOYMENT_`. The prefix is stripped before the value is injected into the container.
-
-When a variable and a secret have the same name, the secret wins, including secrets inherited from the organisation. A repository secret overrides an organisation secret with the same name.
-
-## Guides
-
-### Database
-
-#### Migrations
-
-To create a new migration, run the following command:
-
-```bash
-bun db:generate -- --name "<migration-name>"
-```
-
-Then to run all migrations, run:
-
-```bash
-bun db:migrate
-```
-
-When migration is imperfect,
-delete the migration file, delete the new snapshot file in the meta-folder and roll back the \_journal.json file.
-
-When thats done you can run the migration command again.
-
-#### Database in Kubernetes
-
-You can copy the sqlite file over this command:
-
-```bash
-kubectl cp <namespace>/<pod-name>:/app/data/db.sqlite ./prod-db.sqlite
-```
-
-With k9s you can copy the pod name with `c`
-
-Windows with Datagrip shows a warning locking issues will occur because of WSL.
-Copy the file to your Windows filesystem with the following command:
-
-```bash
-kubectl cp <namespace>/<pod-name>:/app/data/db.sqlite  /mnt/c/Users/<user>/Documents/
-```
+- The service is a MetalLB LoadBalancer on `192.168.178.234`, no ingress. The homelab Caddy (`caddy_routes` in `homelab-infrastructure`) proxies `finance.homelab.rutgerpronk.com` to it.
+- The SQLite database lives on a `local-path` PVC. There are no backups.
+- Repo variables: `APPLICATION_NAME=finance`, `BASE_DOMAIN=finance.homelab.rutgerpronk.com`. `TIME_ZONE` (default `Europe/Amsterdam`) can be set as `DEPLOYMENT_TIME_ZONE`.
