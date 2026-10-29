@@ -14,7 +14,7 @@ Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`m
 
 ## Using it
 
-- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Posten (incomes, expenses, transfer), Saldo (balance history), JSON (the whole config as one document: copy, paste, save).
+- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Posten (incomes, expenses, transfer), JSON (the whole config as one document: copy, paste, save).
 - **API:** `/api/v1`, spec at `/api/v1/openapi.json`. Amounts are euros (max 2 decimals), dates `YYYY-MM-DD`.
   - `GET /overview?date=&days=`
   - `GET|PUT /config`: settings + incomes + expenses. Items with an `id` are updated, without one created, missing ones deleted. Balances are not touched.
@@ -47,3 +47,7 @@ Work happens on `main`; every push deploys production through the shared workflo
 - The service is a MetalLB LoadBalancer on `192.168.178.234`, no ingress. The homelab Caddy (`caddy_routes` in `homelab-infrastructure`) proxies `finance.homelab.rutgerpronk.com` to it.
 - The SQLite database lives on a `local-path` PVC. There are no backups.
 - Repo variables: `APPLICATION_NAME=finance`, `BASE_DOMAIN=finance.homelab.rutgerpronk.com`. `TIME_ZONE` (default `Europe/Amsterdam`) can be set as `DEPLOYMENT_TIME_ZONE`.
+
+## Checking automatic surplus transfers
+
+The user periodically exports bank-statement transactions for both the current and fixed-costs accounts. Compare those transactions with the configured incomes, expenses and automatic transfer amount in the JSON config (/json) to validate that surplus transfers are set up correctly. The balance-entry page is not part of this workflow; do not ask the user to manually enter balances. Treat statement exports as sensitive financial data and only use them for the requested check.

@@ -25,7 +25,6 @@ export const metadata: Metadata = {
 const links = [
   { href: "/", label: "Overzicht" },
   { href: "/posten", label: "Posten" },
-  { href: "/saldo", label: "Saldo" },
   { href: "/json", label: "JSON" },
 ];
 
