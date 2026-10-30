@@ -1,3 +1,4 @@
+import { PieChart, type PieSlice } from "@/components/pie-chart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { transferAmount } from "@/lib/finance/plan";
 import { cyclesPerYear, nextOccurrence } from "@/lib/finance/schedule";
@@ -22,6 +23,16 @@ export default function PostenPage() {
     monthly: moneyEuros((item.amount * cyclesPerYear(item.cycle)) / 12),
   });
 
+  /** Active items as average monthly cents. */
+  const monthlySlices = (items: { id: number; name: string; amount: number; cycle: Cycle; active: boolean }[]) =>
+    items
+      .filter((item) => item.active)
+      .map((item): PieSlice => ({
+        key: String(item.id),
+        label: item.name,
+        value: (item.amount * 100 * cyclesPerYear(item.cycle)) / 12,
+      }));
+
   const transfer = transferAmount({
     incomes: [],
     expenses: expenses
@@ -33,6 +44,24 @@ export default function PostenPage() {
   return (
     <>
       <h1 className="text-2xl font-semibold">Posten</h1>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Inkomsten per maand</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <PieChart title="Verdeling inkomsten per maand" slices={monthlySlices(incomes)} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Vaste lasten per maand</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <PieChart title="Verdeling vaste lasten per maand" slices={monthlySlices(expenses)} />
+          </CardContent>
+        </Card>
+      </div>
       <ItemsSection
         kind="income"
         title="Inkomsten"

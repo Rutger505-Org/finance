@@ -41,7 +41,7 @@ export function PieChart({
     .filter((slice) => slice.value > 0)
     .sort((a, b) => b.value - a.value);
   const total = visible.reduce((sum, slice) => sum + slice.value, 0);
-  if (total <= 0) return null;
+  if (total <= 0) return <p className="text-sm text-muted-foreground">Nog niets.</p>;
 
   const starts = visible.map(
     (_, index) =>
