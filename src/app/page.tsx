@@ -1,4 +1,5 @@
 import { DateNav } from "@/app/_components/date-nav";
+import { PieChart } from "@/components/pie-chart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { isValidIsoDate, parseDay } from "@/lib/finance/dates";
 import { dateLong, money, relativeDate } from "@/lib/format";
@@ -74,6 +75,24 @@ export default async function OverviewPage({
           <p className="mt-3 text-xs text-muted-foreground">Gereserveerd is het deel dat voor die post moet klaarstaan. Bij posten betaald vanaf de lopende rekening wordt het bedrag op de betaaldatum teruggeboekt.</p>
         </CardContent>
       </Card>
+
+      {overview.target > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Verdeling gereserveerd saldo</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <PieChart
+              title="Verdeling gereserveerd saldo per post"
+              slices={expenses.map((expense) => ({
+                key: String(expense.id ?? expense.name),
+                label: expense.name,
+                value: expense.reserved,
+              }))}
+            />
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardContent className="pt-6 text-sm">
