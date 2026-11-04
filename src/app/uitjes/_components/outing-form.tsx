@@ -40,7 +40,7 @@ export function OutingForm({ outing, onDone }: { outing?: OutingDto; onDone?: ()
             id={`${id}-name`}
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="WTF"
+            placeholder="Verjaardag"
             required
           />
         </div>

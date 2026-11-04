@@ -116,7 +116,7 @@ export function SpendingForm({
             id={`${id}-description`}
             value={description}
             onChange={(event) => setDescription(event.target.value)}
-            placeholder="2 Guinness"
+            placeholder="2 bier"
             required
           />
         </div>
@@ -170,7 +170,7 @@ export function SpendingForm({
               id={`${id}-outing-name`}
               value={outingName}
               onChange={(event) => setOutingName(event.target.value)}
-              placeholder="WTF"
+              placeholder="Verjaardag"
               required
             />
           </div>

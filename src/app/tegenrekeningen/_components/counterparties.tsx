@@ -52,7 +52,7 @@ function CounterpartyForm({
             id={`${id}-name`}
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="Doornroosje"
+            placeholder="Café"
             required
           />
         </div>

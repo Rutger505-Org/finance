@@ -16,8 +16,8 @@ describe("reserveNeeded", () => {
 
 const input: PlanInput = {
   incomes: [
-    { name: "Toeslag", amount: 10000, cycle: { type: "monthly", day: 20 }, main: false },
-    { name: "DUO", amount: 50000, cycle: { type: "monthly", day: 24 }, main: true },
+    { name: "Bijbaan", amount: 10000, cycle: { type: "monthly", day: 20 }, main: false },
+    { name: "Salaris", amount: 50000, cycle: { type: "monthly", day: 24 }, main: true },
   ],
   transfer: { cycle: { type: "monthly", day: 24 }, amount: "auto" },
   expenses: [
@@ -47,8 +47,8 @@ describe("buildOverview", () => {
     expect(o.upcoming.map((m) => `${m.kind}:${m.name}`)).toEqual([
       "refund:Kapper",
       "charge:Telefoon",
-      "income:Toeslag",
-      "income:DUO",
+      "income:Bijbaan",
+      "income:Salaris",
       "transfer:Overboeking naar vaste lasten",
     ]);
   });
@@ -56,14 +56,14 @@ describe("buildOverview", () => {
   test("free money runs until the next main income", () => {
     const o = buildOverview(input, today, { window: 31, current: { amount: 30000, date: today } });
     expect(o.current?.periodEnd).toBe(parseDay("2026-11-24"));
-    expect(o.current?.additions.map((m) => m.name)).toEqual(["Toeslag"]);
+    expect(o.current?.additions.map((m) => m.name)).toEqual(["Bijbaan"]);
     expect(o.current?.free).toBe(40000);
     expect(o.current?.daysLeft).toBe(30);
   });
 
   test("an older current balance counts the incomes and transfers since then", () => {
     const o = buildOverview(input, today, { window: 31, current: { amount: 1000, date: parseDay("2026-10-23") } });
-    // + DUO (24 Oct) + Toeslag (20 Nov) − transfer (24 Oct)
+    // + Salaris (24 Oct) + Bijbaan (20 Nov) − transfer (24 Oct)
     expect(o.current?.free).toBe(1000 + 50000 + 10000 - 4000);
   });
 
