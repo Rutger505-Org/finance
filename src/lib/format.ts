@@ -1,5 +1,5 @@
 import { parseDay, type Day } from "@/lib/finance/dates";
-import type { Account, Cycle } from "@/lib/finance/schemas";
+import type { Cycle } from "@/lib/finance/schemas";
 
 const euro = new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" });
 export const money = (cents: number): string => euro.format(Math.round(cents) / 100);
@@ -43,11 +43,6 @@ export function cycleLabel(cycle: Cycle): string {
       return `elke ${cycle.days} dagen (vanaf ${date(parseDay(cycle.anchor))})`;
   }
 }
-
-export const accountLabel: Record<Account, string> = {
-  fixed: "Incasso vaste lasten",
-  current: "Terug naar lopende",
-};
 
 /** Accepts "19,49", "19.49", "1.234,56" and "-12". */
 export function parseAmount(text: string): number | null {

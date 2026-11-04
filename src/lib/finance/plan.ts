@@ -22,10 +22,28 @@ export interface PlanExpense {
   account: Account;
 }
 
+export interface PlanTransfer {
+  name: string;
+  cycle: Cycle;
+  /** Cents, "auto", or the whole amount of the income with that id. */
+  amount: number | "auto" | { income: number };
+}
+
 export interface PlanInput {
   incomes: PlanIncome[];
   expenses: PlanExpense[];
-  transfer: { cycle: Cycle; amount: number | "auto" };
+  transfers: PlanTransfer[];
+}
+
+export interface TransferLine {
+  name: string;
+  cycle: Cycle;
+  /** Per transfer, resolved. */
+  amount: number;
+  source: "auto" | "fixed" | "income";
+  /** Name of the linked income. */
+  income?: string;
+  next: Day;
 }
 
 export interface BalanceInput {
@@ -40,8 +58,6 @@ export interface ExpenseLine {
   amount: number;
   /** Money that should be in the fixed-costs account for this expense at the end of today. */
   reserved: number;
-  /** Share of every transfer that belongs to this expense. */
-  perTransfer: number;
   /** Average per month. */
   monthly: number;
   nextDue: Day;
@@ -67,10 +83,12 @@ export interface Overview {
   expenses: ExpenseLine[];
   /** Required balance of the fixed-costs account at the end of today. */
   target: number;
-  transfer: { next: Day; amount: number; needed: number };
+  /** Sorted by next date. */
+  transfers: TransferLine[];
   upcoming: Movement[];
   window: number;
   nextIncomes: Movement[];
+  /** Average per month; `costs` is what the transfers must cover. */
   monthly: { income: number; costs: number; transfer: number };
   fixed?: {
     balance: number;
@@ -107,13 +125,12 @@ export interface OverviewOptions {
  */
 export function reserveNeeded(
   charges: Day[],
-  transfers: Day[],
+  transfers: { day: Day; share: number }[],
   amount: number,
-  perTransfer: number,
 ): number {
   const events = [
     ...charges.map((day) => ({ day, delta: amount, order: 0 })),
-    ...transfers.map((day) => ({ day, delta: -perTransfer, order: 1 })),
+    ...transfers.map(({ day, share }) => ({ day, delta: -share, order: 1 })),
   ].sort((a, b) => a.day - b.day || a.order - b.order);
 
   let balance = 0;
@@ -125,30 +142,52 @@ export function reserveNeeded(
   return needed;
 }
 
-export function transferAmount(input: PlanInput): { amount: number; needed: number } {
-  const transfersPerYear = cyclesPerYear(input.transfer.cycle);
-  const needed = Math.ceil(
-    input.expenses.reduce(
-      (sum, expense) => sum + (expense.amount * cyclesPerYear(expense.cycle)) / transfersPerYear,
-      0,
-    ),
-  );
-  const amount =
-    input.transfer.amount === "auto" ? Math.ceil(needed / 100) * 100 : input.transfer.amount;
-  return { amount, needed };
+const perYear = (amount: number, cycle: Cycle) => amount * cyclesPerYear(cycle);
+
+/** What the transfers must cover per year: every active expense. */
+export function neededPerYear(input: Pick<PlanInput, "expenses">): number {
+  return input.expenses.reduce((total, expense) => total + perYear(expense.amount, expense.cycle), 0);
+}
+
+/**
+ * The amount of every transfer. Fixed amounts and linked incomes count first;
+ * the auto transfers split what is left of the yearly need, the same amount
+ * per transfer, rounded up to whole euros. A linked income that is missing or
+ * inactive gives 0.
+ */
+export function resolveTransfers(input: PlanInput, today: Day): TransferLine[] {
+  const incomes = new Map(input.incomes.flatMap((income) => (income.id === undefined ? [] : [[income.id, income]])));
+  const lines = input.transfers.map((transfer): TransferLine => {
+    const next = nextOccurrence(transfer.cycle, today - 1);
+    const base = { name: transfer.name, cycle: transfer.cycle, next };
+    if (transfer.amount === "auto") return { ...base, amount: 0, source: "auto" };
+    if (typeof transfer.amount === "number") return { ...base, amount: transfer.amount, source: "fixed" };
+    const income = incomes.get(transfer.amount.income);
+    return { ...base, amount: income?.amount ?? 0, source: "income", income: income?.name };
+  });
+
+  const covered = lines.reduce((total, line) => total + perYear(line.amount, line.cycle), 0);
+  const autos = lines.filter((line) => line.source === "auto");
+  const autoPerYear = autos.reduce((total, line) => total + cyclesPerYear(line.cycle), 0);
+  const rest = Math.max(0, neededPerYear(input) - covered);
+  const auto = autoPerYear > 0 ? Math.ceil(rest / autoPerYear / 100) * 100 : 0;
+  for (const line of autos) line.amount = auto;
+  return lines;
 }
 
 /** Every planned movement in (after, until], sorted by day. */
 export function movementsBetween(input: PlanInput, after: Day, until: Day): Movement[] {
-  const { amount } = transferAmount(input);
+  const transfers = resolveTransfers(input, after + 1).filter((transfer) => transfer.amount > 0);
   const movements: Movement[] = [
     ...input.incomes.flatMap((income) =>
       occurrencesBetween(income.cycle, after, until).map(
         (day): Movement => ({ day, name: income.name, amount: income.amount, kind: "income" }),
       ),
     ),
-    ...occurrencesBetween(input.transfer.cycle, after, until).map(
-      (day): Movement => ({ day, name: "Overboeking naar vaste lasten", amount, kind: "transfer" }),
+    ...transfers.flatMap((transfer) =>
+      occurrencesBetween(transfer.cycle, after, until).map(
+        (day): Movement => ({ day, name: transfer.name, amount: transfer.amount, kind: "transfer" }),
+      ),
     ),
     ...input.expenses.flatMap((expense) =>
       occurrencesBetween(expense.cycle, after, until).map(
@@ -172,42 +211,49 @@ const sum = (movements: Movement[]) => movements.reduce((total, m) => total + m.
 export function buildOverview(input: PlanInput, today: Day, options: OverviewOptions): Overview {
   const warnings: string[] = [];
   const horizon = today + HORIZON_DAYS;
-  const transfersPerYear = cyclesPerYear(input.transfer.cycle);
-  const transfers = occurrencesBetween(input.transfer.cycle, today, horizon);
-  const transfer = transferAmount(input);
+  const transfers = resolveTransfers(input, today);
+  const transferredPerYear = transfers.reduce((total, t) => total + perYear(t.amount, t.cycle), 0);
+  const needed = neededPerYear(input);
+  // Every transfer carries the same fraction of each expense as of all
+  // transferred money; anything above the need is buffer.
+  const share = (amount: number) => (transferredPerYear > 0 ? amount / transferredPerYear : 0);
+  const transferDays = transfers.flatMap((t) =>
+    occurrencesBetween(t.cycle, today, horizon).map((day) => ({ day, fraction: share(t.amount) })),
+  );
 
   const expenses = input.expenses.map((expense): ExpenseLine => {
-    const perYear = cyclesPerYear(expense.cycle);
-    const perTransfer = (expense.amount * perYear) / transfersPerYear;
+    const yearly = perYear(expense.amount, expense.cycle);
     const charges = occurrencesBetween(expense.cycle, today, horizon);
+    const shares = transferDays.map(({ day, fraction }) => ({ day, share: yearly * fraction }));
     return {
       id: expense.id,
       name: expense.name,
       account: expense.account,
       amount: expense.amount,
-      perTransfer,
-      monthly: (expense.amount * perYear) / 12,
-      reserved: Math.round(reserveNeeded(charges, transfers, expense.amount, perTransfer)),
+      monthly: yearly / 12,
+      reserved: Math.round(reserveNeeded(charges, shares, expense.amount)),
       nextDue: nextOccurrence(expense.cycle, today - 1),
     };
   });
 
   const target = expenses.reduce((total, line) => total + line.reserved, 0);
-  if (transfer.amount < transfer.needed) {
+  // 1 cent per year of slack for rounding.
+  if (transferredPerYear + 1 < needed) {
     warnings.push(
-      `De overboeking is te laag: er is minstens ${(transfer.needed / 100).toFixed(2)} euro per keer nodig.`,
+      `De overboekingen zijn te laag: er is gemiddeld ${(needed / 1200).toFixed(2)} euro per maand nodig, je boekt ${(transferredPerYear / 1200).toFixed(2)} euro over.`,
     );
+  }
+  for (const transfer of transfers) {
+    if (transfer.source === "income" && transfer.income === undefined) {
+      warnings.push(`Overboeking "${transfer.name}" hangt aan een inkomen dat niet (meer) actief is, dus 0 euro.`);
+    }
   }
 
   const overview: Overview = {
     today,
     expenses,
     target,
-    transfer: {
-      next: nextOccurrence(input.transfer.cycle, today - 1),
-      amount: transfer.amount,
-      needed: transfer.needed,
-    },
+    transfers: [...transfers].sort((a, b) => a.next - b.next || a.name.localeCompare(b.name)),
     upcoming: movementsBetween(input, today - 1, today + options.window),
     window: options.window,
     nextIncomes: input.incomes
@@ -226,7 +272,7 @@ export function buildOverview(input: PlanInput, today: Day, options: OverviewOpt
         0,
       ),
       costs: expenses.reduce((total, line) => total + line.monthly, 0),
-      transfer: (transfer.amount * transfersPerYear) / 12,
+      transfer: transferredPerYear / 12,
     },
     warnings,
   };

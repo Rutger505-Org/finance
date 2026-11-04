@@ -11,7 +11,6 @@ import { transferAmount } from "@/lib/finance/plan";
 import { cyclesPerYear, nextOccurrence } from "@/lib/finance/schedule";
 import type { Cycle } from "@/lib/finance/schemas";
 import {
-  accountLabel,
   cycleLabel,
   money,
   moneyEuros,
@@ -108,11 +107,7 @@ export default function PostenPage() {
         kind="expense"
         title="Vaste lasten"
         today={isoDay(today)}
-        rows={expenses.map((item): ItemRow => ({
-          item,
-          ...row(item),
-          detail: accountLabel[item.account],
-        }))}
+        rows={expenses.map((item): ItemRow => ({ item, ...row(item) }))}
       />
       <Card>
         <CardHeader>
