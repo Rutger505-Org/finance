@@ -106,7 +106,7 @@ export default function PostenPage() {
             Wanneer en hoeveel je automatisch van je lopende naar je vaste
             lastenrekening overboekt. Vaste bedragen en hele inkomens tellen
             eerst; automatische overboekingen dekken de rest van wat er
-            gemiddeld nodig is, naar boven afgerond op hele euro&apos;s.
+            gemiddeld nodig is, op de cent.
           </CardDescription>
         </CardHeader>
         <CardContent>

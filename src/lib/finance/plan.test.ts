@@ -115,20 +115,23 @@ describe("several transfers", () => {
     ]);
   });
 
-  test("auto transfers split the rest and round up per transfer", () => {
-    const transfers = resolveTransfers(
-      {
-        ...split,
-        transfers: [
-          { name: "A", cycle: { type: "monthly", day: 5 }, amount: "auto" },
-          { name: "B", cycle: { type: "monthly", day: 25 }, amount: "auto" },
-          { name: "C", cycle: { type: "monthly", day: 15 }, amount: 3050 },
-        ],
-      },
-      today,
-    );
-    // (160 − 30.50) / 2 = 64.75 → 65
-    expect(transfers.map((t) => t.amount)).toEqual([6500, 6500, 3050]);
+  test("auto transfers split the rest and round up to the cent", () => {
+    const withFixed = (fixed: number) =>
+      resolveTransfers(
+        {
+          ...split,
+          transfers: [
+            { name: "A", cycle: { type: "monthly", day: 5 }, amount: "auto" },
+            { name: "B", cycle: { type: "monthly", day: 25 }, amount: "auto" },
+            { name: "C", cycle: { type: "monthly", day: 15 }, amount: fixed },
+          ],
+        },
+        today,
+      ).map((t) => t.amount);
+    // (160 − 30.50) / 2 = 64.75: exact, no rounding to euros
+    expect(withFixed(3050)).toEqual([6475, 6475, 3050]);
+    // (160 − 30.01) / 2 = 64.995 → 65.00
+    expect(withFixed(3001)).toEqual([6500, 6500, 3001]);
   });
 
   test("envelopes get their share of every transfer", () => {

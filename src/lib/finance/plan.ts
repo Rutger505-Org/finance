@@ -152,7 +152,7 @@ export function neededPerYear(input: Pick<PlanInput, "expenses">): number {
 /**
  * The amount of every transfer. Fixed amounts and linked incomes count first;
  * the auto transfers split what is left of the yearly need, the same amount
- * per transfer, rounded up to whole euros. A linked income that is missing or
+ * per transfer, rounded up to the cent. A linked income that is missing or
  * inactive gives 0.
  */
 export function resolveTransfers(input: PlanInput, today: Day): TransferLine[] {
@@ -170,7 +170,7 @@ export function resolveTransfers(input: PlanInput, today: Day): TransferLine[] {
   const autos = lines.filter((line) => line.source === "auto");
   const autoPerYear = autos.reduce((total, line) => total + cyclesPerYear(line.cycle), 0);
   const rest = Math.max(0, neededPerYear(input) - covered);
-  const auto = autoPerYear > 0 ? Math.ceil(rest / autoPerYear / 100) * 100 : 0;
+  const auto = autoPerYear > 0 ? Math.ceil(rest / autoPerYear) : 0;
   for (const line of autos) line.amount = auto;
   return lines;
 }

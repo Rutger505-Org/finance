@@ -112,7 +112,7 @@ export type ExpenseDto = z.infer<typeof expenseDto>;
 /**
  * How much a transfer moves:
  * - "auto": what the fixed amounts and incomes don't cover yet, spread over
- *   the auto transfers, rounded up to whole euros per transfer.
+ *   the auto transfers, rounded up to the cent per transfer.
  * - euros: always this amount.
  * - { income }: the whole amount of that income, e.g. the day after it arrives.
  */
