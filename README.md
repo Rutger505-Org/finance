@@ -6,7 +6,7 @@ Overview of fixed costs, the transfers to the fixed-costs account and what's fre
 
 - **Fixed-costs account, required balance:** every expense is an envelope that gets its share of each transfer. "Reserved" is the least it must hold today so it never runs short in the next two years; the target is the sum. A 28-day gym can need more than one charge, because it sometimes falls twice between two transfers.
 - **Expense account:** `fixed` is a direct debit from the fixed-costs account. `current` is paid from the current account; on the due date the reserved money moves back to the current account.
-- **Transfer:** `auto` is the average need per transfer, rounded up to whole euros; the rest builds a buffer.
+- **Transfers:** a list, each with its own cycle (e.g. the day after each income). Amount: euros (fixed), `{ "income": <id> }` (that whole income; it can't be deleted while linked, inactive gives 0) or `auto`. Fixed and income amounts count first; the auto transfers split the rest of the average need, rounded up to whole euros per transfer. Anything above the need builds a buffer. Each transfer carries every expense in proportion to its share of all transferred money.
 - **Free to spend:** latest current-account balance + incomes until the next payment of the main income − transfers in that period. Refunds don't count, that money is already spent on its expense.
 - **Balances:** the overview uses the latest balance per account up to that day. The fixed-costs balance is projected to today with the planned movements since then.
 
@@ -16,7 +16,7 @@ Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`m
 
 ## Using it
 
-- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Posten (incomes, expenses, transfer), Uitgaven (one-off spendings per month, `?maand=YYYY-MM`), Uitjes (outings with totals per category), Tegenrekeningen (counterparties and categories), JSON (the whole config as one document: copy, paste, save).
+- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Posten (incomes, expenses, transfers), Uitgaven (one-off spendings per month, `?maand=YYYY-MM`), Uitjes (outings with totals per category), Tegenrekeningen (counterparties and categories), JSON (the whole config as one document: copy, paste, save).
 - **API:** `/api/v1`, spec at `/api/v1/openapi.json`. Amounts are euros (max 2 decimals), dates `YYYY-MM-DD`.
   - `GET /overview?date=&days=`
   - `GET|PUT /config`: settings + incomes + expenses. Items with an `id` are updated, without one created, missing ones deleted. Balances are not touched.

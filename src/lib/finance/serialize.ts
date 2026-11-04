@@ -27,16 +27,18 @@ export function serializeOverview(o: Overview) {
         account: line.account,
         amount: euros(line.amount),
         reserved: euros(line.reserved),
-        perTransfer: euros(line.perTransfer),
         monthly: euros(line.monthly),
         nextDue: isoDay(line.nextDue),
       })),
     },
-    transfer: {
-      next: isoDay(o.transfer.next),
-      amount: euros(o.transfer.amount),
-      needed: euros(o.transfer.needed),
-    },
+    transfers: o.transfers.map((t) => ({
+      name: t.name,
+      cycle: t.cycle,
+      amount: euros(t.amount),
+      source: t.source,
+      income: t.income ?? null,
+      next: isoDay(t.next),
+    })),
     current: o.current
       ? {
           balance: euros(o.current.balance),

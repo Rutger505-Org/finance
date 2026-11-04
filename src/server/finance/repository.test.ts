@@ -51,7 +51,7 @@ describe("repository", () => {
     const keep = repository.createExpense({ name: "Sport", amount: 30.5, cycle: monthly(1), account: "fixed" });
     repository.createExpense({ name: "Weg", amount: 1, cycle: monthly(1), account: "fixed" });
     repository.replaceConfig({
-      settings: { transfer: { cycle: monthly(25), amount: 300 } },
+      settings: { transfers: [{ name: "T", cycle: monthly(25), amount: 300 }] },
       incomes: [{ name: "Salaris", amount: 500, cycle: monthly(25), main: true }],
       expenses: [
         { id: keep.id, name: "Sport plus", amount: 35, cycle: monthly(1), account: "fixed" },
@@ -59,7 +59,7 @@ describe("repository", () => {
       ],
     });
     const config = repository.getConfig();
-    expect(config.settings.transfer.amount).toBe(300);
+    expect(config.settings.transfers[0]?.amount).toBe(300);
     expect(config.expenses.map((e) => [e.id === keep.id, e.name])).toEqual([
       [true, "Sport plus"],
       [false, "Streaming"],
@@ -71,7 +71,7 @@ describe("repository", () => {
     repository.createExpense({ name: "Sport", amount: 30.5, cycle: monthly(1), account: "fixed" });
     expect(() =>
       repository.replaceConfig({
-        settings: { transfer: { cycle: monthly(25), amount: "auto" } },
+        settings: { transfers: [{ name: "T", cycle: monthly(25), amount: "auto" }] },
         incomes: [],
         expenses: [{ id: 999, name: "X", amount: 1, cycle: monthly(1), account: "fixed" }],
       }),
@@ -89,6 +89,25 @@ describe("repository", () => {
     expect(o.expenses.map((line) => line.name)).toEqual(["Telefoon"]);
     expect(o.current?.balance).toBe(10000);
     expect(o.fixed).toBeUndefined();
+  });
+
+  test("a transfer takes a whole income; that income can't be deleted", () => {
+    const bijbaan = repository.createIncome({ name: "Bijbaan", amount: 100, cycle: monthly(20) });
+    repository.createExpense({ name: "Huur", amount: 150, cycle: monthly(28), account: "current" });
+    expect(() =>
+      repository.putSettings({ transfers: [{ name: "X", cycle: monthly(21), amount: { income: 999 } }] }),
+    ).toThrow("income 999 does not exist");
+    repository.putSettings({
+      transfers: [
+        { name: "Na bijbaan", cycle: monthly(21), amount: { income: bijbaan.id } },
+        { name: "Rest", cycle: monthly(25), amount: "auto" },
+      ],
+    });
+    expect(repository.transfers(today).map((t) => [t.name, t.amount])).toEqual([
+      ["Na bijbaan", 10000],
+      ["Rest", 5000],
+    ]);
+    expect(() => repository.deleteIncome(bijbaan.id)).toThrow("linked to a transfer");
   });
 
   test("default categories are seeded", () => {

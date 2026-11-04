@@ -2,7 +2,7 @@ import { DateNav } from "@/app/_components/date-nav";
 import { PieChart } from "@/components/pie-chart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { isValidIsoDate, parseDay } from "@/lib/finance/dates";
-import { dateLong, money, relativeDate } from "@/lib/format";
+import { cycleLabel, dateLong, money, relativeDate } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
 import Link from "next/link";
 
@@ -153,10 +153,42 @@ export default async function OverviewPage({
       )}
 
       <Card>
-        <CardContent className="pt-6 text-sm">
-          Volgende overboeking van lopend naar vaste lasten:{" "}
-          <strong>{relativeDate(overview.transfer.next, day)}</strong> —{" "}
-          <strong>{money(overview.transfer.amount)}</strong>.
+        <CardHeader>
+          <CardTitle>Automatische overboekingen naar vaste lasten</CardTitle>
+          <p className="text-muted-foreground text-sm">
+            Zo zet je ze in je bank-app.{" "}
+            <Link href="/posten" className="underline">
+              Aanpassen
+            </Link>
+          </p>
+        </CardHeader>
+        <CardContent>
+          <ul className="divide-y text-sm tabular-nums">
+            {overview.transfers.map((transfer) => (
+              <li
+                key={`${transfer.name}-${transfer.next}`}
+                className="flex items-start justify-between gap-4 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium">{transfer.name}</p>
+                  <p className="text-muted-foreground">
+                    {cycleLabel(transfer.cycle)} · volgende{" "}
+                    {relativeDate(transfer.next, day)}
+                    {transfer.source === "income" &&
+                      ` · hele ${transfer.income ?? "inkomen (niet actief)"}`}
+                    {transfer.source === "auto" && " · automatisch"}
+                  </p>
+                </div>
+                <p className="shrink-0 text-right font-medium">
+                  {money(transfer.amount)}
+                </p>
+              </li>
+            ))}
+            <li className="flex justify-between gap-4 py-2 font-semibold">
+              <span>Gemiddeld per maand (nodig {money(overview.monthly.costs)})</span>
+              <span>{money(overview.monthly.transfer)}</span>
+            </li>
+          </ul>
         </CardContent>
       </Card>
     </main>

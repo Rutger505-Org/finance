@@ -17,7 +17,7 @@ describe("schemas", () => {
 
   test("issues name the broken field", () => {
     const result = configSchema.safeParse({
-      settings: { transfer: { cycle: { type: "monthly", day: 1 }, amount: "auto" } },
+      settings: { transfers: [{ name: "T", cycle: { type: "monthly", day: 1 }, amount: "auto" }] },
       incomes: [],
       expenses: [{ name: "X", amount: 1, cycle: { type: "weekly" }, account: "fixed" }],
     });
@@ -28,7 +28,7 @@ describe("schemas", () => {
   test("config rejects two main incomes and duplicate ids", () => {
     const income = { name: "A", amount: 1, cycle: { type: "monthly", day: 1 }, main: true };
     const result = configSchema.safeParse({
-      settings: { transfer: { cycle: { type: "monthly", day: 1 }, amount: "auto" } },
+      settings: { transfers: [{ name: "T", cycle: { type: "monthly", day: 1 }, amount: "auto" }] },
       incomes: [
         { ...income, id: 1 },
         { ...income, id: 1 },
@@ -38,6 +38,21 @@ describe("schemas", () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(formatIssues(result.error).map((issue) => issue.path)).toEqual(["incomes[1].id", "incomes"]);
+    }
+  });
+
+  test("a transfer can only link an income in the same config", () => {
+    const income = { id: 1, name: "A", amount: 1, cycle: { type: "monthly", day: 1 } };
+    const config = (incomeId: number) => ({
+      settings: { transfers: [{ name: "T", cycle: { type: "monthly", day: 2 }, amount: { income: incomeId } }] },
+      incomes: [income],
+      expenses: [],
+    });
+    expect(configSchema.safeParse(config(1)).success).toBe(true);
+    const result = configSchema.safeParse(config(2));
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(formatIssues(result.error)[0]?.path).toBe("settings.transfers[0].amount.income");
     }
   });
 });

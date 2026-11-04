@@ -1,7 +1,8 @@
 import { isoDay, type Day } from "@/lib/finance/dates";
-import { buildOverview, type Overview } from "@/lib/finance/plan";
+import { buildOverview, resolveTransfers, type Overview, type PlanInput, type TransferLine } from "@/lib/finance/plan";
 import {
   defaultSettings,
+  linkedIncomeIds,
   type Account,
   type BalanceCreate,
   type BalanceDto,
@@ -138,7 +139,28 @@ export function createRepository(db: Db) {
 
   function getSettings(): Settings {
     const row = db.select().from(settings).where(eq(settings.id, 1)).get();
-    return row ? { transfer: row.transfer } : defaultSettings;
+    return row ? { transfers: row.transfers } : defaultSettings;
+  }
+
+  /** A transfer may only take its amount from an income that exists. */
+  function checkLinkedIncomes(value: Settings, known: Set<number>) {
+    value.transfers.forEach((transfer, index) => {
+      if (typeof transfer.amount === "object" && !known.has(transfer.amount.income)) {
+        throw new HttpError(400, `transfers[${index}].amount.income: income ${transfer.amount.income} does not exist`);
+      }
+    });
+  }
+
+  /** Active incomes and expenses in cents. */
+  function planInput(): PlanInput {
+    return {
+      incomes: db.select().from(income).where(eq(income.active, true)).orderBy(asc(income.id)).all(),
+      expenses: db.select().from(expense).where(eq(expense.active, true)).orderBy(asc(expense.id)).all(),
+      transfers: getSettings().transfers.map((transfer) => ({
+        ...transfer,
+        amount: typeof transfer.amount === "number" ? toCents(transfer.amount) : transfer.amount,
+      })),
+    };
   }
 
   function latestBalance(account: Account, onOrBefore: Day) {
@@ -367,6 +389,9 @@ export function createRepository(db: Db) {
       });
     },
     deleteIncome(id: number): void {
+      if (linkedIncomeIds(getSettings()).includes(id)) {
+        throw new HttpError(409, `Income ${id} is linked to a transfer; change that transfer first`);
+      }
       const row = db.delete(income).where(eq(income.id, id)).returning().get();
       if (!row) notFound("Income", id);
     },
@@ -400,9 +425,10 @@ export function createRepository(db: Db) {
 
     getSettings,
     putSettings(value: Settings): Settings {
+      checkLinkedIncomes(value, new Set(db.select({ id: income.id }).from(income).all().map((r) => r.id)));
       db.insert(settings)
-        .values({ id: 1, transfer: value.transfer })
-        .onConflictDoUpdate({ target: settings.id, set: { transfer: value.transfer } })
+        .values({ id: 1, transfers: value.transfers })
+        .onConflictDoUpdate({ target: settings.id, set: { transfers: value.transfers } })
         .run();
       return getSettings();
     },
@@ -484,42 +510,24 @@ export function createRepository(db: Db) {
         }
 
         tx.insert(settings)
-          .values({ id: 1, transfer: config.settings.transfer })
-          .onConflictDoUpdate({ target: settings.id, set: { transfer: config.settings.transfer } })
+          .values({ id: 1, transfers: config.settings.transfers })
+          .onConflictDoUpdate({ target: settings.id, set: { transfers: config.settings.transfers } })
           .run();
       });
     },
 
     overview(today: Day, window = 31): Overview {
-      const transfer = getSettings().transfer;
       const fixedBalance = latestBalance("fixed", today);
       const currentBalance = latestBalance("current", today);
-      return buildOverview(
-        {
-          incomes: db
-            .select()
-            .from(income)
-            .where(eq(income.active, true))
-            .orderBy(asc(income.id))
-            .all(),
-          expenses: db
-            .select()
-            .from(expense)
-            .where(eq(expense.active, true))
-            .orderBy(asc(expense.id))
-            .all(),
-          transfer: {
-            cycle: transfer.cycle,
-            amount: transfer.amount === "auto" ? "auto" : toCents(transfer.amount),
-          },
-        },
-        today,
-        {
-          window,
-          fixed: fixedBalance && { amount: fixedBalance.amount, date: parseDay(fixedBalance.date) },
-          current: currentBalance && { amount: currentBalance.amount, date: parseDay(currentBalance.date) },
-        },
-      );
+      return buildOverview(planInput(), today, {
+        window,
+        fixed: fixedBalance && { amount: fixedBalance.amount, date: parseDay(fixedBalance.date) },
+        current: currentBalance && { amount: currentBalance.amount, date: parseDay(currentBalance.date) },
+      });
+    },
+    /** Resolved transfers in their saved order. */
+    transfers(today: Day): TransferLine[] {
+      return resolveTransfers(planInput(), today);
     },
   };
 }

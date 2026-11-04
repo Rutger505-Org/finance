@@ -7,7 +7,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { isoDay } from "@/lib/finance/dates";
-import { transferAmount } from "@/lib/finance/plan";
 import { cyclesPerYear, nextOccurrence } from "@/lib/finance/schedule";
 import type { Cycle } from "@/lib/finance/schemas";
 import {
@@ -59,16 +58,7 @@ export default function PostenPage() {
         value: (item.amount * 100 * cyclesPerYear(item.cycle)) / 12,
       }));
 
-  const transfer = transferAmount({
-    incomes: [],
-    expenses: expenses
-      .filter((expense) => expense.active)
-      .map((expense) => ({
-        ...expense,
-        amount: Math.round(expense.amount * 100),
-      })),
-    transfer: { cycle: settings.transfer.cycle, amount: "auto" },
-  });
+  const amounts = repository.transfers(today).map((t) => money(t.amount));
 
   return (
     <>
@@ -111,17 +101,19 @@ export default function PostenPage() {
       />
       <Card>
         <CardHeader>
-          <CardTitle>Overboeking naar vaste lasten</CardTitle>
+          <CardTitle>Overboekingen naar vaste lasten</CardTitle>
           <CardDescription>
-            Wanneer je van je lopende naar je vaste lastenrekening overboekt.
-            Automatisch = gemiddeld nodig per keer, naar boven afgerond op hele
-            euro&apos;s.
+            Wanneer en hoeveel je automatisch van je lopende naar je vaste
+            lastenrekening overboekt. Vaste bedragen en hele inkomens tellen
+            eerst; automatische overboekingen dekken de rest van wat er
+            gemiddeld nodig is, naar boven afgerond op hele euro&apos;s.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <SettingsForm
             settings={settings}
-            needed={money(Math.ceil(transfer.needed / 100) * 100)}
+            incomes={incomes}
+            amounts={amounts}
           />
         </CardContent>
       </Card>
