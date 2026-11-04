@@ -56,8 +56,8 @@ export type Cycle = z.infer<typeof cycleSchema>;
 
 /**
  * - fixed: direct debit from the fixed-costs account.
- * - current: paid from the current account; on the due date the reserved
- *   money moves back from the fixed-costs account to the current account.
+ * - current: paid from the current account; the day before the due date the
+ *   reserved money moves back from the fixed-costs account to the current account.
  */
 export const accountSchema = z.enum(["fixed", "current"]);
 export type Account = z.infer<typeof accountSchema>;

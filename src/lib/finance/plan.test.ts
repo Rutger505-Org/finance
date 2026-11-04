@@ -159,6 +159,16 @@ describe("several transfers", () => {
     expect(o.expenses[0]?.reserved).toBe(0);
   });
 
+  test("a current-account expense leaves the fixed-costs account the day before it is due", () => {
+    // Huur due 28 Oct: refund on 27 Oct, so nothing is reserved at the end of that day.
+    const before = buildOverview(split, parseDay("2026-10-26"), { window: 2 });
+    expect(before.expenses[0]?.reserved).toBe(16000);
+    expect(before.upcoming.filter((m) => m.kind === "refund").map((m) => m.day)).toEqual([parseDay("2026-10-27")]);
+    const dayBefore = buildOverview(split, parseDay("2026-10-27"), { window: 0 });
+    expect(dayBefore.expenses[0]?.reserved).toBe(0);
+    expect(dayBefore.expenses[0]?.nextDue).toBe(parseDay("2026-10-28"));
+  });
+
   test("a linked income that is not active gives 0 and a warning", () => {
     const o = buildOverview({ ...split, incomes: split.incomes.filter((i) => i.id !== 1) }, today, { window: 0 });
     expect(o.transfers.find((t) => t.name === "Na bijbaan")?.amount).toBe(0);

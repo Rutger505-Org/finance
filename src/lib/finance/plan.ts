@@ -67,7 +67,7 @@ export interface ExpenseLine {
  * - income: arrives on the current account
  * - transfer: current → fixed-costs account
  * - charge: direct debit from the fixed-costs account
- * - refund: fixed-costs → current account, for an expense paid from the current account
+ * - refund: fixed-costs → current account, the day before an expense paid from the current account
  */
 export type MovementKind = "income" | "transfer" | "charge" | "refund";
 
@@ -175,6 +175,16 @@ export function resolveTransfers(input: PlanInput, today: Day): TransferLine[] {
   return lines;
 }
 
+/**
+ * Days in (after, until] on which an expense's money leaves the fixed-costs
+ * account: the due date for a direct debit, the day before for an expense paid
+ * from the current account (the bank moves it back a day early).
+ */
+export function outflowDays(expense: PlanExpense, after: Day, until: Day): Day[] {
+  if (expense.account === "fixed") return occurrencesBetween(expense.cycle, after, until);
+  return occurrencesBetween(expense.cycle, after + 1, until + 1).map((day) => day - 1);
+}
+
 /** Every planned movement in (after, until], sorted by day. */
 export function movementsBetween(input: PlanInput, after: Day, until: Day): Movement[] {
   const transfers = resolveTransfers(input, after + 1).filter((transfer) => transfer.amount > 0);
@@ -190,7 +200,7 @@ export function movementsBetween(input: PlanInput, after: Day, until: Day): Move
       ),
     ),
     ...input.expenses.flatMap((expense) =>
-      occurrencesBetween(expense.cycle, after, until).map(
+      outflowDays(expense, after, until).map(
         (day): Movement => ({
           day,
           name: expense.name,
@@ -223,7 +233,7 @@ export function buildOverview(input: PlanInput, today: Day, options: OverviewOpt
 
   const expenses = input.expenses.map((expense): ExpenseLine => {
     const yearly = perYear(expense.amount, expense.cycle);
-    const charges = occurrencesBetween(expense.cycle, today, horizon);
+    const charges = outflowDays(expense, today, horizon);
     const shares = transferDays.map(({ day, fraction }) => ({ day, share: yearly * fraction }));
     return {
       id: expense.id,
