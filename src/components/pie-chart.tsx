@@ -41,7 +41,8 @@ export function PieChart({
     .filter((slice) => slice.value > 0)
     .sort((a, b) => b.value - a.value);
   const total = visible.reduce((sum, slice) => sum + slice.value, 0);
-  if (total <= 0) return <p className="text-sm text-muted-foreground">Nog niets.</p>;
+  if (total <= 0)
+    return <p className="text-muted-foreground text-sm">Nog niets.</p>;
 
   const starts = visible.map(
     (_, index) =>
@@ -94,18 +95,18 @@ export function PieChart({
           ),
         )}
       </svg>
-      <ul className="grid w-full gap-1 text-sm tabular-nums">
+      <ul className="grid w-full min-w-0 grid-cols-1 gap-1 text-sm tabular-nums sm:w-auto sm:flex-1">
         {arcs.map((arc) => (
           <li key={arc.key} className="flex items-center gap-2">
             <span
               className="size-3 shrink-0 rounded-sm"
               style={{ backgroundColor: arc.color }}
             />
-            <span className="flex-1 truncate">{arc.label}</span>
+            <span className="min-w-0 flex-1 truncate">{arc.label}</span>
             <span className="text-muted-foreground">
               {(arc.fraction * 100).toFixed(1).replace(".", ",")}%
             </span>
-            <span className="w-24 text-right font-medium">
+            <span className="w-20 shrink-0 text-right font-medium">
               {money(arc.value)}
             </span>
           </li>
