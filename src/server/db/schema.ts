@@ -51,8 +51,7 @@ export const balance = sqliteTable(
 /** A single row (id 1). */
 export const settings = sqliteTable("settings", {
   id: integer("id").primaryKey(),
-  /** Amounts in euros, as in `settingsSchema`. */
-  transfers: text("transfers", { mode: "json" }).$type<Settings["transfers"]>().notNull(),
+  transfer: text("transfer", { mode: "json" }).$type<Settings["transfer"]>().notNull(),
   updatedAt: timestamps.updatedAt,
 });
 

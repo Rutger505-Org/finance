@@ -109,35 +109,19 @@ export type ExpenseCreate = z.infer<typeof expenseCreate>;
 export type ExpensePatch = z.infer<typeof expensePatch>;
 export type ExpenseDto = z.infer<typeof expenseDto>;
 
-/**
- * How much a transfer moves:
- * - "auto": what the fixed amounts and incomes don't cover yet, spread over
- *   the auto transfers, rounded up to whole euros per transfer.
- * - euros: always this amount.
- * - { income }: the whole amount of that income, e.g. the day after it arrives.
- */
-export const transferAmountSchema = z.union([z.literal("auto"), euros, z.strictObject({ income: id })]);
-export type TransferAmount = z.infer<typeof transferAmountSchema>;
-
-/** Recurring transfer from the current account to the fixed-costs account. */
-export const transferSchema = z.strictObject({ name, cycle: cycleSchema, amount: transferAmountSchema });
-export type Transfer = z.infer<typeof transferSchema>;
-
 export const settingsSchema = z.strictObject({
-  transfers: z.array(transferSchema).min(1).max(10),
+  /** Recurring transfer from the current account to the fixed-costs account. */
+  transfer: z.strictObject({
+    cycle: cycleSchema,
+    /** "auto": the average need per transfer, rounded up to whole euros. */
+    amount: z.union([z.literal("auto"), euros]),
+  }),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
 export const defaultSettings: Settings = {
-  transfers: [{ name: "Overboeking naar vaste lasten", cycle: { type: "monthly", day: 1 }, amount: "auto" }],
+  transfer: { cycle: { type: "monthly", day: 1 }, amount: "auto" },
 };
-
-/** Income ids the transfers take their amount from. */
-export function linkedIncomeIds(settings: Settings): number[] {
-  return settings.transfers.flatMap((transfer) =>
-    typeof transfer.amount === "object" ? [transfer.amount.income] : [],
-  );
-}
 
 export const balanceCreate = z.strictObject({
   account: accountSchema,
@@ -270,16 +254,6 @@ export const configSchema = z
   .superRefine((config, ctx) => {
     uniqueIds(config.incomes, ctx, "incomes");
     uniqueIds(config.expenses, ctx, "expenses");
-    const incomeIds = new Set(config.incomes.flatMap((income) => income.id ?? []));
-    config.settings.transfers.forEach((transfer, index) => {
-      if (typeof transfer.amount === "object" && !incomeIds.has(transfer.amount.income)) {
-        ctx.addIssue({
-          code: "custom",
-          message: `Income ${transfer.amount.income} is not in this config`,
-          path: ["settings", "transfers", index, "amount", "income"],
-        });
-      }
-    });
     if (config.incomes.filter((income) => income.main).length > 1) {
       ctx.addIssue({ code: "custom", message: "At most one income can be main", path: ["incomes"] });
     }
