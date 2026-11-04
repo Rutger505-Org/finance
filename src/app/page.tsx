@@ -76,11 +76,6 @@ export default async function OverviewPage({
                         {relativeDate(expense.nextDue, day)} ·{" "}
                         {money(expense.amount)}
                       </p>
-                      <p className="text-muted-foreground text-xs">
-                        {expense.account === "current"
-                          ? "Terug naar lopende rekening"
-                          : "Incasso van vaste lastenrekening"}
-                      </p>
                     </div>
                     <p className="shrink-0 text-right font-medium">
                       {money(expense.reserved)}
@@ -102,10 +97,9 @@ export default async function OverviewPage({
                     <th className="py-2 pr-4 text-right font-medium">
                       Postbedrag
                     </th>
-                    <th className="py-2 pr-4 font-medium">
+                    <th className="py-2 font-medium">
                       Volgende betaaldatum
                     </th>
-                    <th className="py-2 font-medium">Geld gaat naar</th>
                   </tr>
                 </thead>
                 <tbody className="tabular-nums">
@@ -118,13 +112,8 @@ export default async function OverviewPage({
                       <td className="py-2 pr-4 text-right">
                         {money(expense.amount)}
                       </td>
-                      <td className="py-2 pr-4">
+                      <td className="py-2">
                         {relativeDate(expense.nextDue, day)}
-                      </td>
-                      <td className="text-muted-foreground py-2">
-                        {expense.account === "current"
-                          ? "Terug naar lopende rekening"
-                          : "Incasso van vaste lastenrekening"}
                       </td>
                     </tr>
                   ))}
@@ -133,16 +122,14 @@ export default async function OverviewPage({
                     <td className="py-2 pr-4 text-right">
                       {money(overview.target)}
                     </td>
-                    <td colSpan={3} />
+                    <td colSpan={2} />
                   </tr>
                 </tbody>
               </table>
             </>
           )}
           <p className="text-muted-foreground mt-3 text-xs">
-            Gereserveerd is het deel dat voor die post moet klaarstaan. Bij
-            posten betaald vanaf de lopende rekening wordt het bedrag op de
-            betaaldatum teruggeboekt.
+            Gereserveerd is het deel dat voor die post moet klaarstaan.
           </p>
         </CardContent>
       </Card>
