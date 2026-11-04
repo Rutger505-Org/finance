@@ -54,3 +54,52 @@ export const settings = sqliteTable("settings", {
   transfer: text("transfer", { mode: "json" }).$type<Settings["transfer"]>().notNull(),
   updatedAt: timestamps.updatedAt,
 });
+
+/** What a spending was on (Drinken, Eten, ...). */
+export const category = sqliteTable("category", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+  ...timestamps,
+});
+
+/** What a spending was for: a party or night out. Spendings on other days can belong to it (the ticket). */
+export const outing = sqliteTable("outing", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  /** YYYY-MM-DD, the day it happens. */
+  date: text("date"),
+  note: text("note"),
+  ...timestamps,
+});
+
+/** A known bank counterparty, to recognise statement lines. */
+export const counterparty = sqliteTable("counterparty", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  /** Normalised: uppercase, no spaces. */
+  iban: text("iban").unique(),
+  categoryId: integer("category_id").references(() => category.id, { onDelete: "set null" }),
+  note: text("note"),
+  ...timestamps,
+});
+
+/** A one-off spending from the current account. Negative = money back (Tikkie). */
+export const spending = sqliteTable(
+  "spending",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** YYYY-MM-DD */
+    date: text("date").notNull(),
+    amount: integer("amount").notNull(),
+    description: text("description").notNull(),
+    categoryId: integer("category_id").references(() => category.id, { onDelete: "set null" }),
+    outingId: integer("outing_id").references(() => outing.id, { onDelete: "set null" }),
+    counterpartyId: integer("counterparty_id").references(() => counterparty.id, { onDelete: "set null" }),
+    note: text("note"),
+    ...timestamps,
+  },
+  (table) => [
+    index("spending_date_idx").on(table.date),
+    index("spending_outing_idx").on(table.outingId),
+  ],
+);

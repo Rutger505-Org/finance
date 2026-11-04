@@ -1,14 +1,25 @@
 import {
   balanceCreate,
   balanceDto,
+  categoryCreate,
+  categoryDto,
   configSchema,
+  counterpartyCreate,
+  counterpartyDto,
+  counterpartyPatch,
   expenseCreate,
   expenseDto,
   expensePatch,
   incomeCreate,
   incomeDto,
   incomePatch,
+  outingCreate,
+  outingDto,
+  outingPatch,
   settingsSchema,
+  spendingCreate,
+  spendingDto,
+  spendingPatch,
 } from "@/lib/finance/schemas";
 import { z } from "zod";
 
@@ -61,6 +72,23 @@ function crud(tag: string, plural: string, item: string) {
   };
 }
 
+function spendingPaths() {
+  const paths = crud("Spending", "spendings", "Spending");
+  const date = (name: string, description: string) => ({ name, in: "query", schema: { type: "string", format: "date" }, description });
+  const id = (name: string) => ({ name, in: "query", schema: { type: "integer" } });
+  Object.assign(paths["/api/v1/spendings"].get, {
+    summary: "List one-off spendings, newest first",
+    parameters: [
+      date("from", "Inclusive"),
+      date("to", "Inclusive"),
+      id("categoryId"),
+      id("outingId"),
+      id("counterpartyId"),
+    ],
+  });
+  return paths;
+}
+
 export function openApiDocument() {
   return {
     openapi: "3.1.0",
@@ -99,6 +127,18 @@ export function openApiDocument() {
       },
       ...crud("Income", "incomes", "Income"),
       ...crud("Expense", "expenses", "Expense"),
+      ...spendingPaths(),
+      ...crud("Outing", "outings", "Outing"),
+      ...crud("Counterparty", "counterparties", "Counterparty"),
+      "/api/v1/categories": {
+        get: { tags: ["Category"], summary: "List categories", responses: { "200": list("Category") } },
+        post: { tags: ["Category"], summary: "Create a category", requestBody: body("CategoryCreate"), responses: { "201": ok("Category", "Created"), ...errors } },
+      },
+      "/api/v1/categories/{id}": {
+        parameters: idParam,
+        patch: { tags: ["Category"], summary: "Rename a category", requestBody: body("CategoryCreate"), responses: { "200": ok("Category"), ...errors } },
+        delete: { tags: ["Category"], summary: "Delete a category; its spendings and counterparties lose it", responses: { "204": { description: "Deleted" }, ...errors } },
+      },
       "/api/v1/balances": {
         get: {
           tags: ["Balance"],
@@ -125,6 +165,17 @@ export function openApiDocument() {
         ExpenseCreate: schema(expenseCreate),
         ExpensePatch: schema(expensePatch),
         Settings: schema(settingsSchema),
+        Spending: schema(spendingDto),
+        SpendingCreate: schema(spendingCreate),
+        SpendingPatch: schema(spendingPatch),
+        Outing: schema(outingDto),
+        OutingCreate: schema(outingCreate),
+        OutingPatch: schema(outingPatch),
+        Counterparty: schema(counterpartyDto),
+        CounterpartyCreate: schema(counterpartyCreate),
+        CounterpartyPatch: schema(counterpartyPatch),
+        Category: schema(categoryDto),
+        CategoryCreate: schema(categoryCreate),
         Balance: schema(balanceDto),
         BalanceCreate: schema(balanceCreate),
         Config: schema(configSchema),

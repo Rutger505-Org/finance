@@ -2,13 +2,20 @@
 
 import {
   balanceCreate,
+  categoryCreate,
   configSchema,
+  counterpartyCreate,
+  counterpartyPatch,
   expenseCreate,
   expensePatch,
   formatIssues,
   incomeCreate,
   incomePatch,
+  outingCreate,
+  outingPatch,
   settingsSchema,
+  spendingCreate,
+  spendingPatch,
   type Issue,
 } from "@/lib/finance/schemas";
 import { repository, today } from "@/server/finance";
@@ -69,6 +76,57 @@ export async function addBalance(input: unknown) {
 
 export async function deleteBalance(id: number) {
   return run(() => repository.deleteBalance(id));
+}
+
+export async function saveSpending(id: number | null, input: unknown) {
+  return run(() =>
+    id === null
+      ? repository.createSpending(spendingCreate.parse(input), today())
+      : repository.updateSpending(id, spendingPatch.parse(input)),
+  );
+}
+
+export async function deleteSpending(id: number) {
+  return run(() => repository.deleteSpending(id));
+}
+
+/** Returns the outing's id, so a form can select an outing it just created. */
+export async function saveOuting(id: number | null, input: unknown): Promise<ActionResult & { id?: number }> {
+  let saved: number | undefined;
+  const result = run(() => {
+    saved = (
+      id === null ? repository.createOuting(outingCreate.parse(input)) : repository.updateOuting(id, outingPatch.parse(input))
+    ).id;
+  });
+  return result.ok ? { ...result, id: saved } : result;
+}
+
+export async function deleteOuting(id: number) {
+  return run(() => repository.deleteOuting(id));
+}
+
+export async function saveCounterparty(id: number | null, input: unknown) {
+  return run(() =>
+    id === null
+      ? repository.createCounterparty(counterpartyCreate.parse(input))
+      : repository.updateCounterparty(id, counterpartyPatch.parse(input)),
+  );
+}
+
+export async function deleteCounterparty(id: number) {
+  return run(() => repository.deleteCounterparty(id));
+}
+
+export async function saveCategory(id: number | null, input: unknown) {
+  return run(() =>
+    id === null
+      ? repository.createCategory(categoryCreate.parse(input))
+      : repository.renameCategory(id, categoryCreate.parse(input)),
+  );
+}
+
+export async function deleteCategory(id: number) {
+  return run(() => repository.deleteCategory(id));
 }
 
 /** Raw JSON from the editor. Returns the stored config (with new ids) on success. */

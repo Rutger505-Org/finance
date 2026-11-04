@@ -60,3 +60,9 @@ export function parseAmount(text: string): number | null {
 
 /** Euros as an editable string: 19.5 → "19,50". */
 export const amountText = (euros: number): string => euros.toFixed(2).replace(".", ",");
+
+/** "2026-11" → "november 2026". */
+export function monthLabel(month: string): string {
+  const [year, m] = month.split("-").map(Number) as [number, number];
+  return `${monthNames[m - 1]} ${year}`;
+}

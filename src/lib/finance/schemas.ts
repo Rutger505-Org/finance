@@ -138,6 +138,97 @@ export const balanceDto = z.strictObject({
 export type BalanceCreate = z.infer<typeof balanceCreate>;
 export type BalanceDto = z.infer<typeof balanceDto>;
 
+const optionalId = id.nullable();
+
+export const categoryCreate = z.strictObject({ name: z.string().trim().min(1).max(50) });
+export const categoryDto = z.strictObject({ id, ...categoryCreate.shape });
+export type CategoryCreate = z.infer<typeof categoryCreate>;
+export type CategoryDto = z.infer<typeof categoryDto>;
+
+const outingFields = {
+  name,
+  /** The day it happens; spendings on other days (the ticket) can still belong to it. */
+  date: isoDate.nullable(),
+  note,
+};
+export const outingCreate = z.strictObject({
+  ...outingFields,
+  date: outingFields.date.optional(),
+  note: note.optional(),
+});
+export const outingPatch = z.strictObject(outingFields).partial();
+export const outingDto = z.strictObject({ id, ...outingFields });
+export type OutingCreate = z.infer<typeof outingCreate>;
+export type OutingPatch = z.infer<typeof outingPatch>;
+export type OutingDto = z.infer<typeof outingDto>;
+
+/** Uppercase without spaces; Dutch and other IBANs, checked with the mod-97 checksum. */
+export const iban = z
+  .string()
+  .transform((value) => value.replace(/\s+/g, "").toUpperCase())
+  .refine(isValidIban, { message: "Geen geldig IBAN" });
+
+export function isValidIban(value: string): boolean {
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(value)) return false;
+  const digits = (value.slice(4) + value.slice(0, 4)).replace(/[A-Z]/g, (c) => String(c.charCodeAt(0) - 55));
+  let remainder = 0;
+  for (const digit of digits) remainder = (remainder * 10 + Number(digit)) % 97;
+  return remainder === 1;
+}
+
+const counterpartyFields = {
+  name,
+  iban: iban.nullable(),
+  /** Default category for spendings to this counterparty. */
+  categoryId: optionalId,
+  note,
+};
+export const counterpartyCreate = z.strictObject({
+  ...counterpartyFields,
+  iban: counterpartyFields.iban.optional(),
+  categoryId: optionalId.optional(),
+  note: note.optional(),
+});
+export const counterpartyPatch = z.strictObject(counterpartyFields).partial();
+export const counterpartyDto = z.strictObject({ id, ...counterpartyFields, iban: z.string().nullable() });
+export type CounterpartyCreate = z.infer<typeof counterpartyCreate>;
+export type CounterpartyPatch = z.infer<typeof counterpartyPatch>;
+export type CounterpartyDto = z.infer<typeof counterpartyDto>;
+
+const spendingFields = {
+  date: isoDate,
+  /** Negative is money back, e.g. a Tikkie from a friend. */
+  amount: signedEuros.refine((value) => value !== 0, { message: "Bedrag mag niet 0 zijn" }),
+  description: z.string().trim().min(1).max(200),
+  categoryId: optionalId,
+  outingId: optionalId,
+  counterpartyId: optionalId,
+  note,
+};
+export const spendingCreate = z.strictObject({
+  ...spendingFields,
+  /** Defaults to today. */
+  date: isoDate.optional(),
+  /** Omitted: the counterparty's default category. */
+  categoryId: optionalId.optional(),
+  outingId: optionalId.optional(),
+  counterpartyId: optionalId.optional(),
+  note: note.optional(),
+});
+export const spendingPatch = z.strictObject(spendingFields).partial();
+export const spendingDto = z.strictObject({ id, ...spendingFields });
+export const spendingFilter = z.strictObject({
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+  categoryId: z.coerce.number().pipe(id).optional(),
+  outingId: z.coerce.number().pipe(id).optional(),
+  counterpartyId: z.coerce.number().pipe(id).optional(),
+});
+export type SpendingCreate = z.infer<typeof spendingCreate>;
+export type SpendingPatch = z.infer<typeof spendingPatch>;
+export type SpendingDto = z.infer<typeof spendingDto>;
+export type SpendingFilter = z.infer<typeof spendingFilter>;
+
 function uniqueIds(items: { id?: number }[], ctx: z.RefinementCtx, key: string) {
   const seen = new Set<number>();
   items.forEach((item, index) => {
