@@ -10,7 +10,9 @@ Overview of fixed costs, the transfers to the fixed-costs account and what's fre
 - **Free to spend:** latest current-account balance + incomes until the next payment of the main income − transfers in that period. Refunds don't count, that money is already spent on its expense.
 - **Balances:** the overview uses the latest balance per account up to that day. The fixed-costs balance is projected to today with the planned movements since then.
 
-- **One-off spendings:** date, amount (negative = money back, e.g. a Tikkie), description. Category = what it was on (Drinken, Eten, ...; editable, seeded by the migration). Outing = what it was for (a party); spendings on other days, like a ticket bought months earlier, belong to it too. Counterparties (name, IBAN, default category) identify statement lines; a new spending to a counterparty without a category gets its default.
+- **One-off spendings:** date, amount (negative = money back, e.g. a Tikkie), description. Category = what it was on (Drinken, Eten, ...; editable, seeded by the migration). Outing = what it was for (a party); spendings on other days, like a ticket bought months earlier, belong to it too.
+- **Counterparties:** what is known about who is behind a bank statement line: real name, IBANs and parts of the name on the line (aliases, each belongs to one counterparty), default category, handling (`spending`; `skip` for fixed costs, own accounts, income; `ask` when it depends on the line) and a note. A new spending to a counterparty without a category gets its default.
+- **Bookings:** the app doesn't import statements. An agent reads the export and books it through the API: each booking turns one or more statement lines into one spending, or skips them with a reason. Only the line key (account|date|balance before|balance after|description), date and amount are kept, so an overlapping export never books a line twice. Deleting a spending frees its lines.
 
 Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`month`, `day`), `interval` (`days` + an `anchor` date of any known occurrence).
 
@@ -22,7 +24,8 @@ Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`m
   - `GET|PUT /config`: settings + incomes + expenses. Items with an `id` are updated, without one created, missing ones deleted. Balances are not touched.
   - `GET|POST /incomes`, `GET|PATCH|DELETE /incomes/{id}`, same for `/expenses`
   - `GET|PUT /settings`
-  - `GET|POST /spendings` (`?from=&to=&categoryId=&outingId=&counterpartyId=`), `GET|PATCH|DELETE /spendings/{id}`, same for `/outings` and `/counterparties`
+  - `GET|POST /spendings` (`?from=&to=&categoryId=&outingId=&counterpartyId=`), `GET|PATCH|DELETE /spendings/{id}`, same for `/outings` and `/counterparties` (`ibans`, `names` replace the saved aliases)
+  - `POST /bookings` (`[{ lines: [{ key, date, amount }], spending: {...} }` or `skip: "reason"` instead of `spending`), all or nothing, 409 if a line is already booked; `GET /booked-lines?from=&to=`; `DELETE /booked-lines?key=` (un-skip)
   - `GET|POST /categories`, `PATCH|DELETE /categories/{id}`. Deleting a category, outing or counterparty keeps its spendings, unlinked.
   - `GET|POST /balances` (`?account=fixed|current&limit=`), `DELETE /balances/{id}`
 

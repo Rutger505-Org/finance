@@ -192,21 +192,51 @@ export function isValidIban(value: string): boolean {
   return remainder === 1;
 }
 
+/**
+ * What a counterparty's statement lines usually are: `spending` (always a spending, default category),
+ * `skip` (never: fixed costs, own accounts, income) or `ask` (depends on the line: Tikkies, family).
+ */
+export const counterpartyHandling = z.enum(["spending", "skip", "ask"]);
+export type CounterpartyHandling = z.infer<typeof counterpartyHandling>;
+
+/** Case-insensitive part of the name on a statement line ("albert heijn" matches "Albert Heijn 1178"). */
+const nameAlias = z
+  .string()
+  .trim()
+  .min(2)
+  .max(100)
+  .transform((value) => value.toLowerCase());
+
+function uniqueValues(values: string[], ctx: z.RefinementCtx) {
+  const seen = new Set<string>();
+  values.forEach((value, index) => {
+    if (seen.has(value)) ctx.addIssue({ code: "custom", path: [index], message: `Dubbel: ${value}` });
+    seen.add(value);
+  });
+}
+
 const counterpartyFields = {
   name,
-  iban: iban.nullable(),
   /** Default category for spendings to this counterparty. */
   categoryId: optionalId,
+  handling: counterpartyHandling,
+  /** Recognised by any of these IBANs ... */
+  ibans: z.array(iban).max(50).superRefine(uniqueValues),
+  /** ... or names on the line. */
+  names: z.array(nameAlias).max(50).superRefine(uniqueValues),
   note,
 };
 export const counterpartyCreate = z.strictObject({
   ...counterpartyFields,
-  iban: counterpartyFields.iban.optional(),
   categoryId: optionalId.optional(),
+  handling: counterpartyHandling.optional(),
+  ibans: counterpartyFields.ibans.optional(),
+  names: counterpartyFields.names.optional(),
   note: note.optional(),
 });
+/** `ibans` and `names` replace the saved ones. */
 export const counterpartyPatch = z.strictObject(counterpartyFields).partial();
-export const counterpartyDto = z.strictObject({ id, ...counterpartyFields, iban: z.string().nullable() });
+export const counterpartyDto = z.strictObject({ id, ...counterpartyFields, ibans: z.array(z.string()), names: z.array(z.string()) });
 export type CounterpartyCreate = z.infer<typeof counterpartyCreate>;
 export type CounterpartyPatch = z.infer<typeof counterpartyPatch>;
 export type CounterpartyDto = z.infer<typeof counterpartyDto>;
@@ -244,6 +274,40 @@ export type SpendingCreate = z.infer<typeof spendingCreate>;
 export type SpendingPatch = z.infer<typeof spendingPatch>;
 export type SpendingDto = z.infer<typeof spendingDto>;
 export type SpendingFilter = z.infer<typeof spendingFilter>;
+
+/** A statement line as the booking client sends it: key from the export, booking date, bank sign. */
+const bookedLineInput = z.strictObject({
+  key: z.string().min(1).max(2000),
+  date: isoDate,
+  amount: signedEuros,
+});
+
+/** One or more statement lines that become one spending, or are skipped with a reason. */
+export const booking = z.union([
+  z.strictObject({ lines: z.array(bookedLineInput).min(1), spending: spendingCreate }),
+  z.strictObject({ lines: z.array(bookedLineInput).min(1), skip: z.string().trim().min(1).max(200) }),
+]);
+export const bookings = z
+  .array(booking)
+  .min(1)
+  .max(1000)
+  .superRefine((items, ctx) =>
+    uniqueValues(
+      items.flatMap((item) => item.lines.map((line) => line.key)),
+      ctx,
+    ),
+  );
+export const bookedLineDto = z.strictObject({
+  key: z.string(),
+  date: isoDate,
+  amount: signedEuros,
+  spendingId: id.nullable(),
+  skip: z.string().nullable(),
+});
+export const bookedLineFilter = z.strictObject({ from: isoDate.optional(), to: isoDate.optional() });
+export type Booking = z.infer<typeof booking>;
+export type BookedLineDto = z.infer<typeof bookedLineDto>;
+export type BookedLineFilter = z.infer<typeof bookedLineFilter>;
 
 function uniqueIds(items: { id?: number }[], ctx: z.RefinementCtx, key: string) {
   const seen = new Set<number>();

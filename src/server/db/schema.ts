@@ -1,5 +1,5 @@
-import type { Account, Cycle, Settings } from "@/lib/finance/schemas";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import type { Account, CounterpartyHandling, Cycle, Settings } from "@/lib/finance/schemas";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /** Amounts are cents. Cycles are JSON, validated by `cycleSchema` on the way in. */
 
@@ -73,16 +73,35 @@ export const outing = sqliteTable("outing", {
   ...timestamps,
 });
 
-/** A known bank counterparty, to recognise statement lines. */
+/** A known bank counterparty: what Rocky knows about who is behind a statement line. */
 export const counterparty = sqliteTable("counterparty", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Real name ("Concertzaal"), not the card terminal name. */
   name: text("name").notNull(),
-  /** Normalised: uppercase, no spaces. */
-  iban: text("iban").unique(),
   categoryId: integer("category_id").references(() => category.id, { onDelete: "set null" }),
+  /** What its statement lines usually are, see `CounterpartyHandling`. */
+  handling: text("handling").$type<CounterpartyHandling>().notNull().default("ask"),
   note: text("note"),
   ...timestamps,
 });
+
+/** How a statement line is recognised: an IBAN, or a case-insensitive part of the name on the line. */
+export const counterpartyAlias = sqliteTable(
+  "counterparty_alias",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    counterpartyId: integer("counterparty_id")
+      .notNull()
+      .references(() => counterparty.id, { onDelete: "cascade" }),
+    kind: text("kind").$type<"iban" | "name">().notNull(),
+    /** IBAN uppercase without spaces; name lowercase. */
+    value: text("value").notNull(),
+  },
+  (table) => [
+    uniqueIndex("counterparty_alias_kind_value_unique").on(table.kind, table.value),
+    index("counterparty_alias_counterparty_idx").on(table.counterpartyId),
+  ],
+);
 
 /** A one-off spending from the current account. Negative = money back (Tikkie). */
 export const spending = sqliteTable(
@@ -103,4 +122,22 @@ export const spending = sqliteTable(
     index("spending_date_idx").on(table.date),
     index("spending_outing_idx").on(table.outingId),
   ],
+);
+
+/** A statement line that has been booked: as (part of) a spending, or skipped. Lines themselves aren't stored. */
+export const bookedLine = sqliteTable(
+  "booked_line",
+  {
+    /** Identifies the line across overlapping exports: account|date|balance before|balance after|description. */
+    key: text("key").primaryKey(),
+    /** Booking date, YYYY-MM-DD. */
+    date: text("date").notNull(),
+    /** Bank sign: negative is money out. */
+    amount: integer("amount").notNull(),
+    spendingId: integer("spending_id").references(() => spending.id, { onDelete: "cascade" }),
+    /** Why it isn't a spending (fixed cost, own account, income). */
+    skipReason: text("skip_reason"),
+    createdAt: timestamps.createdAt,
+  },
+  (table) => [index("booked_line_date_idx").on(table.date), index("booked_line_spending_idx").on(table.spendingId)],
 );

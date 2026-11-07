@@ -5,6 +5,9 @@ import {
   linkedIncomeIds,
   type Account,
   type BalanceCreate,
+  type BookedLineDto,
+  type BookedLineFilter,
+  type Booking,
   type BalanceDto,
   type CategoryCreate,
   type CategoryDto,
@@ -30,10 +33,10 @@ import {
 import { parseDay } from "@/lib/finance/dates";
 import { HttpError } from "@/server/http-error";
 import * as schema from "@/server/db/schema";
-import { and, asc, desc, eq, gte, lte, ne, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, ne, notInArray, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 
-const { balance, category, counterparty, expense, income, outing, settings, spending } = schema;
+const { balance, bookedLine, category, counterparty, counterpartyAlias, expense, income, outing, settings, spending } = schema;
 
 type Db = BunSQLiteDatabase<typeof schema>;
 type IncomeRow = typeof income.$inferSelect;
@@ -78,8 +81,31 @@ function outingDto(row: OutingRow): OutingDto {
   return { id: row.id, name: row.name, date: row.date, note: row.note };
 }
 
-function counterpartyDto(row: CounterpartyRow): CounterpartyDto {
-  return { id: row.id, name: row.name, iban: row.iban, categoryId: row.categoryId, note: row.note };
+type AliasRow = typeof counterpartyAlias.$inferSelect;
+type BookedLineRow = typeof bookedLine.$inferSelect;
+
+function counterpartyDto(row: CounterpartyRow, aliases: AliasRow[]): CounterpartyDto {
+  const values = (kind: AliasRow["kind"]) =>
+    aliases.filter((alias) => alias.counterpartyId === row.id && alias.kind === kind).map((alias) => alias.value);
+  return {
+    id: row.id,
+    name: row.name,
+    categoryId: row.categoryId,
+    handling: row.handling,
+    ibans: values("iban"),
+    names: values("name"),
+    note: row.note,
+  };
+}
+
+function bookedLineDto(row: BookedLineRow): BookedLineDto {
+  return {
+    key: row.key,
+    date: row.date,
+    amount: toEuros(row.amount),
+    spendingId: row.spendingId,
+    skip: row.skipReason,
+  };
 }
 
 function spendingDto(row: SpendingRow): SpendingDto {
@@ -195,7 +221,53 @@ export function createRepository(db: Db) {
 
   function getCounterparty(id: number): CounterpartyDto {
     const row = db.select().from(counterparty).where(eq(counterparty.id, id)).get();
-    return row ? counterpartyDto(row) : notFound("Counterparty", id);
+    if (!row) notFound("Counterparty", id);
+    return counterpartyDto(row, db.select().from(counterpartyAlias).where(eq(counterpartyAlias.counterpartyId, id)).all());
+  }
+
+  type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+  /** Without a categoryId the counterparty's default category is used. */
+  function insertSpending(target: Db | Tx, input: SpendingCreate, today: Day): SpendingDto {
+    assertRefs(input);
+    const categoryId =
+      input.categoryId !== undefined
+        ? input.categoryId
+        : input.counterpartyId
+          ? getCounterparty(input.counterpartyId).categoryId
+          : null;
+    const row = target
+      .insert(spending)
+      .values({
+        date: input.date ?? isoDay(today),
+        amount: toCents(input.amount),
+        description: input.description,
+        categoryId,
+        outingId: input.outingId ?? null,
+        counterpartyId: input.counterpartyId ?? null,
+        note: input.note ?? null,
+      })
+      .returning()
+      .get();
+    return spendingDto(row);
+  }
+
+  /** Replaces the aliases of one kind; an alias of another counterparty is a 409. */
+  function setAliases(tx: Tx, counterpartyId: number, kind: AliasRow["kind"], values: string[] | undefined) {
+    if (values === undefined) return;
+    tx.delete(counterpartyAlias)
+      .where(and(eq(counterpartyAlias.counterpartyId, counterpartyId), eq(counterpartyAlias.kind, kind)))
+      .run();
+    for (const value of values) {
+      const taken = tx
+        .select({ name: counterparty.name })
+        .from(counterpartyAlias)
+        .innerJoin(counterparty, eq(counterparty.id, counterpartyAlias.counterpartyId))
+        .where(and(eq(counterpartyAlias.kind, kind), eq(counterpartyAlias.value, value)))
+        .get();
+      if (taken) throw new HttpError(409, `${kind === "iban" ? "IBAN" : "Naam"} ${value} hoort al bij ${taken.name}`);
+      tx.insert(counterpartyAlias).values({ counterpartyId, kind, value }).run();
+    }
   }
 
   function getSpending(id: number): SpendingDto {
@@ -268,45 +340,52 @@ export function createRepository(db: Db) {
     },
 
     listCounterparties(): CounterpartyDto[] {
+      const aliases = db.select().from(counterpartyAlias).orderBy(asc(counterpartyAlias.id)).all();
       return db
         .select()
         .from(counterparty)
         .orderBy(sql`${counterparty.name} collate nocase`)
         .all()
-        .map(counterpartyDto);
+        .map((row) => counterpartyDto(row, aliases));
     },
     getCounterparty,
     createCounterparty(input: CounterpartyCreate): CounterpartyDto {
       assertRefs(input);
-      try {
-        const row = db
+      const id = db.transaction((tx) => {
+        const row = tx
           .insert(counterparty)
           .values({
             name: input.name,
-            iban: input.iban ?? null,
             categoryId: input.categoryId ?? null,
+            handling: input.handling ?? "ask",
             note: input.note ?? null,
           })
           .returning()
           .get();
-        return counterpartyDto(row);
-      } catch (error) {
-        conflict(error, `IBAN ${input.iban} is already saved`);
-      }
+        setAliases(tx, row.id, "iban", input.ibans ?? []);
+        setAliases(tx, row.id, "name", input.names ?? []);
+        return row.id;
+      });
+      return getCounterparty(id);
     },
     updateCounterparty(id: number, patch: CounterpartyPatch): CounterpartyDto {
       assertRefs(patch);
-      try {
-        const row = db.update(counterparty).set(patch).where(eq(counterparty.id, id)).returning().get();
-        return row ? counterpartyDto(row) : notFound("Counterparty", id);
-      } catch (error) {
-        conflict(error, `IBAN ${patch.iban} is already saved`);
-      }
+      const { ibans, names, ...fields } = patch;
+      db.transaction((tx) => {
+        const row = Object.keys(fields).length
+          ? tx.update(counterparty).set(fields).where(eq(counterparty.id, id)).returning().get()
+          : tx.select().from(counterparty).where(eq(counterparty.id, id)).get();
+        if (!row) notFound("Counterparty", id);
+        setAliases(tx, id, "iban", ibans);
+        setAliases(tx, id, "name", names);
+      });
+      return getCounterparty(id);
     },
     /** Its spendings stay, without counterparty. */
     deleteCounterparty(id: number): void {
       db.transaction((tx) => {
         tx.update(spending).set({ counterpartyId: null }).where(eq(spending.counterpartyId, id)).run();
+        tx.delete(counterpartyAlias).where(eq(counterpartyAlias.counterpartyId, id)).run();
         const row = tx.delete(counterparty).where(eq(counterparty.id, id)).returning().get();
         if (!row) notFound("Counterparty", id);
       });
@@ -333,36 +412,78 @@ export function createRepository(db: Db) {
     getSpending,
     /** Without a categoryId the counterparty's default category is used. */
     createSpending(input: SpendingCreate, today: Day): SpendingDto {
-      assertRefs(input);
-      const categoryId =
-        input.categoryId !== undefined
-          ? input.categoryId
-          : input.counterpartyId
-            ? getCounterparty(input.counterpartyId).categoryId
-            : null;
-      const row = db
-        .insert(spending)
-        .values({
-          date: input.date ?? isoDay(today),
-          amount: toCents(input.amount),
-          description: input.description,
-          categoryId,
-          outingId: input.outingId ?? null,
-          counterpartyId: input.counterpartyId ?? null,
-          note: input.note ?? null,
-        })
-        .returning()
-        .get();
-      return spendingDto(row);
+      return insertSpending(db, input, today);
     },
     updateSpending(id: number, patch: SpendingPatch): SpendingDto {
       assertRefs(patch);
       const row = db.update(spending).set(spendingValues(patch)).where(eq(spending.id, id)).returning().get();
       return row ? spendingDto(row) : notFound("Spending", id);
     },
+    /** Its statement lines count as not booked again. */
     deleteSpending(id: number): void {
-      const row = db.delete(spending).where(eq(spending.id, id)).returning().get();
-      if (!row) notFound("Spending", id);
+      db.transaction((tx) => {
+        tx.delete(bookedLine).where(eq(bookedLine.spendingId, id)).run();
+        const row = tx.delete(spending).where(eq(spending.id, id)).returning().get();
+        if (!row) notFound("Spending", id);
+      });
+    },
+
+    listBookedLines(filter: BookedLineFilter = {}): BookedLineDto[] {
+      return db
+        .select()
+        .from(bookedLine)
+        .where(
+          and(
+            filter.from ? gte(bookedLine.date, filter.from) : undefined,
+            filter.to ? lte(bookedLine.date, filter.to) : undefined,
+          ),
+        )
+        .orderBy(asc(bookedLine.date), asc(bookedLine.key))
+        .all()
+        .map(bookedLineDto);
+    },
+    /** All or nothing: an already booked line is a 409 and nothing is saved. Returns the spending per booking (null when skipped). */
+    book(bookings: Booking[], today: Day): (SpendingDto | null)[] {
+      const keys = bookings.flatMap((item) => item.lines.map((line) => line.key));
+      const booked = db.select({ key: bookedLine.key }).from(bookedLine).where(inArray(bookedLine.key, keys)).all();
+      if (booked.length > 0) {
+        throw new HttpError(409, `Al geboekt: ${booked.map((row) => row.key).join("; ")}`);
+      }
+      bookings.forEach((item, index) => {
+        if (!("spending" in item)) return;
+        try {
+          assertRefs(item.spending);
+        } catch (error) {
+          if (error instanceof HttpError) throw new HttpError(error.status, `[${index}].spending.${error.message}`);
+          throw error;
+        }
+      });
+      return db.transaction((tx) =>
+        bookings.map((item) => {
+          const created = "spending" in item ? insertSpending(tx, item.spending, today) : null;
+          for (const line of item.lines) {
+            tx.insert(bookedLine)
+              .values({
+                key: line.key,
+                date: line.date,
+                amount: toCents(line.amount),
+                spendingId: created?.id ?? null,
+                skipReason: "skip" in item ? item.skip : null,
+              })
+              .run();
+          }
+          return created;
+        }),
+      );
+    },
+    /** Un-skip a line; booked lines of a spending go with the spending. */
+    deleteBookedLine(key: string): void {
+      const row = db.select().from(bookedLine).where(eq(bookedLine.key, key)).get();
+      if (!row) throw new HttpError(404, "Line not booked");
+      if (row.spendingId !== null) {
+        throw new HttpError(409, `Line belongs to spending ${row.spendingId}; delete that spending instead`);
+      }
+      db.delete(bookedLine).where(eq(bookedLine.key, key)).run();
     },
 
     listIncomes(): IncomeDto[] {

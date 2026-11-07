@@ -6,11 +6,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import type { CategoryDto, CounterpartyDto } from "@/lib/finance/schemas";
+import type { CategoryDto, CounterpartyDto, CounterpartyHandling } from "@/lib/finance/schemas";
 import { useId, useState, useTransition } from "react";
 
 /** NL91ABNA0417164300 → NL91 ABNA 0417 1643 00 */
 const formatIban = (iban: string) => iban.replace(/(.{4})/g, "$1 ").trim();
+
+const handlings: Record<CounterpartyHandling, string> = {
+  spending: "Uitgave",
+  skip: "Geen uitgave",
+  ask: "Per regel",
+};
+
+/** "a, b" → ["a", "b"] */
+const list = (text: string) =>
+  text
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 
 function CounterpartyForm({
   counterparty,
@@ -23,7 +36,9 @@ function CounterpartyForm({
 }) {
   const id = useId();
   const [name, setName] = useState(counterparty?.name ?? "");
-  const [iban, setIban] = useState(counterparty?.iban ? formatIban(counterparty.iban) : "");
+  const [ibans, setIbans] = useState(counterparty?.ibans.map(formatIban).join(", ") ?? "");
+  const [names, setNames] = useState(counterparty?.names.join(", ") ?? "");
+  const [handling, setHandling] = useState<CounterpartyHandling>(counterparty?.handling ?? "ask");
   const [categoryId, setCategoryId] = useState(counterparty?.categoryId == null ? "" : String(counterparty.categoryId));
   const [note, setNote] = useState(counterparty?.note ?? "");
   const [result, setResult] = useState<ActionResult | null>(null);
@@ -34,7 +49,9 @@ function CounterpartyForm({
     startTransition(async () => {
       const response = await saveCounterparty(counterparty?.id ?? null, {
         name,
-        iban: iban.trim() || null,
+        ibans: list(ibans),
+        names: list(names),
+        handling,
         categoryId: categoryId === "" ? null : Number(categoryId),
         note: note.trim() || null,
       });
@@ -57,13 +74,18 @@ function CounterpartyForm({
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor={`${id}-iban`}>IBAN</Label>
-          <Input
-            id={`${id}-iban`}
-            value={iban}
-            onChange={(event) => setIban(event.target.value)}
-            placeholder="NL00 BANK 0123 4567 89"
-          />
+          <Label htmlFor={`${id}-handling`}>Afschriftregels</Label>
+          <Select
+            id={`${id}-handling`}
+            value={handling}
+            onChange={(event) => setHandling(event.target.value as CounterpartyHandling)}
+          >
+            {Object.entries(handlings).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </Select>
         </div>
         <div className="space-y-1">
           <Label htmlFor={`${id}-category`}>Standaardcategorie</Label>
@@ -77,13 +99,33 @@ function CounterpartyForm({
           </Select>
         </div>
       </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-ibans`}>IBANs</Label>
+          <Input
+            id={`${id}-ibans`}
+            value={ibans}
+            onChange={(event) => setIbans(event.target.value)}
+            placeholder="NL00 BANK 0123 4567 89, ..."
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-names`}>Naam op afschrift bevat</Label>
+          <Input
+            id={`${id}-names`}
+            value={names}
+            onChange={(event) => setNames(event.target.value)}
+            placeholder="supermarkt, ..."
+          />
+        </div>
+      </div>
       <div className="space-y-1">
         <Label htmlFor={`${id}-note`}>Notitie</Label>
         <Input
           id={`${id}-note`}
           value={note}
           onChange={(event) => setNote(event.target.value)}
-          placeholder="Naam op afschrift, pinautomaat, ..."
+          placeholder="Wat het is, wanneer je er komt, ..."
         />
       </div>
       <ResultMessage result={result} />
@@ -140,7 +182,9 @@ export function Counterparties({
                   <p className="font-medium">{counterparty.name}</p>
                   <p className="text-muted-foreground text-sm">
                     {[
-                      counterparty.iban ? formatIban(counterparty.iban) : "Geen IBAN",
+                      handlings[counterparty.handling],
+                      ...counterparty.ibans.map(formatIban),
+                      ...counterparty.names.map((name) => `"${name}"`),
                       categories.find((c) => c.id === counterparty.categoryId)?.name,
                       counterparty.note,
                     ]

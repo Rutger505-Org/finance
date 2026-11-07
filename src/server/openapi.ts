@@ -1,6 +1,8 @@
 import {
   balanceCreate,
   balanceDto,
+  bookedLineDto,
+  bookings,
   categoryCreate,
   categoryDto,
   configSchema,
@@ -130,6 +132,36 @@ export function openApiDocument() {
       ...spendingPaths(),
       ...crud("Outing", "outings", "Outing"),
       ...crud("Counterparty", "counterparties", "Counterparty"),
+      "/api/v1/bookings": {
+        post: {
+          tags: ["Booking"],
+          summary:
+            "Book statement lines, all or nothing: each item turns its lines into one spending or skips them. An already booked line is a 409. Returns the spending per item (null when skipped).",
+          requestBody: body("Bookings"),
+          responses: {
+            "201": { description: "Booked", content: { "application/json": { schema: { type: "array", items: { anyOf: [ref("Spending"), { type: "null" }] } } } } },
+            "409": ok("Error", "A line is already booked"),
+            ...errors,
+          },
+        },
+      },
+      "/api/v1/booked-lines": {
+        get: {
+          tags: ["Booking"],
+          summary: "Booked statement lines by booking date, to leave them out of the next export",
+          parameters: [
+            { name: "from", in: "query", schema: { type: "string", format: "date" } },
+            { name: "to", in: "query", schema: { type: "string", format: "date" } },
+          ],
+          responses: { "200": list("BookedLine"), ...errors },
+        },
+        delete: {
+          tags: ["Booking"],
+          summary: "Un-skip a line. Lines of a spending are freed by deleting the spending.",
+          parameters: [{ name: "key", in: "query", required: true, schema: { type: "string" } }],
+          responses: { "204": { description: "Deleted" }, "409": ok("Error", "Line belongs to a spending"), ...errors },
+        },
+      },
       "/api/v1/categories": {
         get: { tags: ["Category"], summary: "List categories", responses: { "200": list("Category") } },
         post: { tags: ["Category"], summary: "Create a category", requestBody: body("CategoryCreate"), responses: { "201": ok("Category", "Created"), ...errors } },
@@ -174,6 +206,8 @@ export function openApiDocument() {
         Counterparty: schema(counterpartyDto),
         CounterpartyCreate: schema(counterpartyCreate),
         CounterpartyPatch: schema(counterpartyPatch),
+        Bookings: schema(bookings),
+        BookedLine: schema(bookedLineDto),
         Category: schema(categoryDto),
         CategoryCreate: schema(categoryCreate),
         Balance: schema(balanceDto),

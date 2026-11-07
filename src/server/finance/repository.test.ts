@@ -125,9 +125,14 @@ describe("repository", () => {
     const drinks = repository.listCategories().find((c) => c.name === "Drinken")!;
     const food = repository.listCategories().find((c) => c.name === "Eten")!;
     const cafe = repository.createCounterparty(
-      counterpartyCreate.parse({ name: "Café", iban: "nl91 abna 0417 1643 00", categoryId: drinks.id }),
+      counterpartyCreate.parse({
+        name: "Café",
+        ibans: ["nl91 abna 0417 1643 00"],
+        names: ["Café Centrum"],
+        categoryId: drinks.id,
+      }),
     );
-    expect(cafe.iban).toBe("NL91ABNA0417164300");
+    expect(cafe).toMatchObject({ ibans: ["NL91ABNA0417164300"], names: ["café centrum"], handling: "ask" });
     const party = repository.createOuting({ name: "Verjaardag", date: "2026-11-07" });
     const beer = repository.createSpending(
       { description: "Bier", amount: 12.5, counterpartyId: cafe.id, outingId: party.id },
@@ -157,8 +162,56 @@ describe("repository", () => {
   test("unknown references and duplicates are rejected", () => {
     expect(() => repository.createSpending({ description: "X", amount: 1, outingId: 99 }, today)).toThrow("outingId");
     expect(() => repository.createCategory({ name: "Eten" })).toThrow("already exists");
-    repository.createCounterparty({ name: "A", iban: "NL91ABNA0417164300" });
-    expect(() => repository.createCounterparty({ name: "B", iban: "NL91ABNA0417164300" })).toThrow("already saved");
+    const a = repository.createCounterparty({ name: "A", ibans: ["NL91ABNA0417164300"], names: ["shop"] });
+    expect(() => repository.createCounterparty({ name: "B", ibans: ["NL91ABNA0417164300"] })).toThrow("hoort al bij A");
+    expect(() => repository.createCounterparty({ name: "B", names: ["shop"] })).toThrow("hoort al bij A");
+    expect(repository.listCounterparties().map((c) => c.name)).toEqual(["A"]);
+    // Replacing its own aliases is fine; omitted kinds stay.
+    expect(repository.updateCounterparty(a.id, { names: ["shop", "shop 2"] })).toMatchObject({
+      ibans: ["NL91ABNA0417164300"],
+      names: ["shop", "shop 2"],
+    });
+    repository.deleteCounterparty(a.id);
+    expect(repository.createCounterparty({ name: "B", names: ["shop"] }).names).toEqual(["shop"]);
+  });
+
+  test("bookings: lines become a spending or are skipped, once", () => {
+    const line = (key: string, amount: number) => ({ key, date: "2026-11-01", amount });
+    const [beer, gym] = repository.book(
+      [
+        { lines: [line("a", -3.5), line("b", -2)], spending: { description: "Bier", amount: 5.5, date: "2026-10-31" } },
+        { lines: [line("c", -30)], skip: "Vaste lasten" },
+      ],
+      today,
+    );
+    expect(beer).toMatchObject({ amount: 5.5, date: "2026-10-31" });
+    expect(gym).toBeNull();
+    expect(repository.listBookedLines({ from: "2026-11-01" })).toEqual([
+      { key: "a", date: "2026-11-01", amount: -3.5, spendingId: beer!.id, skip: null },
+      { key: "b", date: "2026-11-01", amount: -2, spendingId: beer!.id, skip: null },
+      { key: "c", date: "2026-11-01", amount: -30, spendingId: null, skip: "Vaste lasten" },
+    ]);
+
+    // All or nothing: one booked line rejects the whole batch.
+    expect(() =>
+      repository.book(
+        [
+          { lines: [line("d", -1)], skip: "x" },
+          { lines: [line("a", -3.5)], skip: "x" },
+        ],
+        today,
+      ),
+    ).toThrow("Al geboekt: a");
+    expect(() => repository.book([{ lines: [line("d", -1)], spending: { description: "X", amount: 1, outingId: 99 } }], today)).toThrow(
+      "outingId",
+    );
+    expect(repository.listBookedLines().map((l) => l.key)).toEqual(["a", "b", "c"]);
+
+    // Deleting the spending frees its lines; a skip is undone directly.
+    expect(() => repository.deleteBookedLine("a")).toThrow("spending");
+    repository.deleteSpending(beer!.id);
+    repository.deleteBookedLine("c");
+    expect(repository.listBookedLines()).toEqual([]);
   });
 
   test("spending filter by date range", () => {
