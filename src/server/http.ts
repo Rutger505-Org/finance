@@ -41,3 +41,14 @@ export function parseId(raw: string): number {
 }
 
 export type IdContext = { params: Promise<{ id: string }> };
+
+/** Like {@link readJson}, but an empty body is `{}`. */
+export async function readOptionalJson(request: Request): Promise<unknown> {
+  const text = await request.text();
+  if (text.trim() === "") return {};
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new HttpError(400, "Request body is not valid JSON");
+  }
+}

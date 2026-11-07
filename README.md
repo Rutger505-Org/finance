@@ -10,19 +10,21 @@ Overview of fixed costs, the transfers to the fixed-costs account and what's fre
 - **Free to spend:** latest current-account balance + incomes until the next payment of the main income − transfers in that period. Refunds don't count, that money is already spent on its expense.
 - **Balances:** the overview uses the latest balance per account up to that day. The fixed-costs balance is projected to today with the planned movements since then.
 
-- **One-off spendings:** date, amount (negative = money back, e.g. a Tikkie), description. Category = what it was on (Drinken, Eten, ...; editable, seeded by the migration). Outing = what it was for (a party); spendings on other days, like a ticket bought months earlier, belong to it too. Counterparties (name, IBAN, default category) identify statement lines; a new spending to a counterparty without a category gets its default.
+- **One-off spendings:** date, amount (negative = money back, e.g. a Tikkie), description. Category = what it was on (Drinken, Eten, ...; editable, seeded by the migration). Outing = what it was for (a party); spendings on other days, like a ticket bought months earlier, belong to it too. Counterparties (name, IBAN, name match, default category, mode) identify statement lines; a new spending to a counterparty without a category gets its default.
+- **Statements:** import an ABN AMRO TXT/TAB export (file or pasted, tabs or spaces) per account. Lines are stored once (overlapping exports are fine) and the last end balance is recorded. Each open line is matched to a counterparty (name match first, then IBAN): mode spending makes a spending on the payment day, skip skips it, review and unmatched lines stay open on Afschriften. Fixed-costs lines are never spendings.
 
 Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`month`, `day`), `interval` (`days` + an `anchor` date of any known occurrence).
 
 ## Using it
 
-- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Posten (incomes, expenses, transfers), Uitgaven (one-off spendings per month, `?maand=YYYY-MM`), Uitjes (outings with totals per category), Tegenrekeningen (counterparties and categories), JSON (the whole config as one document: copy, paste, save).
+- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Posten (incomes, expenses, transfers), Uitgaven (one-off spendings per month, `?maand=YYYY-MM`), Afschriften (import, open lines), Uitjes (outings with totals per category), Tegenrekeningen (counterparties and categories), JSON (the whole config as one document: copy, paste, save).
 - **API:** `/api/v1`, spec at `/api/v1/openapi.json`. Amounts are euros (max 2 decimals), dates `YYYY-MM-DD`.
   - `GET /overview?date=&days=`
   - `GET|PUT /config`: settings + incomes + expenses. Items with an `id` are updated, without one created, missing ones deleted. Balances are not touched.
   - `GET|POST /incomes`, `GET|PATCH|DELETE /incomes/{id}`, same for `/expenses`
   - `GET|PUT /settings`
   - `GET|POST /spendings` (`?from=&to=&categoryId=&outingId=&counterpartyId=`), `GET|PATCH|DELETE /spendings/{id}`, same for `/outings` and `/counterparties`
+  - `POST /statements` (`{ account, text }`), `GET /statement-lines` (`?status=open|spending|skipped&account=&from=&to=`), `GET|PATCH /statement-lines/{id}` (`{ skipped }`), `POST /statement-lines/{id}/spending`, `POST /statement-lines/process`
   - `GET|POST /categories`, `PATCH|DELETE /categories/{id}`. Deleting a category, outing or counterparty keeps its spendings, unlinked.
   - `GET|POST /balances` (`?account=fixed|current&limit=`), `DELETE /balances/{id}`
 

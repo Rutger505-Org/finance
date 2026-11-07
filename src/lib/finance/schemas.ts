@@ -192,17 +192,31 @@ export function isValidIban(value: string): boolean {
   return remainder === 1;
 }
 
+/**
+ * What importing a statement line of this counterparty does:
+ * - spending: becomes a spending with the default category.
+ * - skip: not a spending (own account, income, fixed cost).
+ * - review: stays open to decide per line (e.g. family that both pays you back and gets paid).
+ */
+export const counterpartyModeSchema = z.enum(["spending", "skip", "review"]);
+export type CounterpartyMode = z.infer<typeof counterpartyModeSchema>;
+
 const counterpartyFields = {
   name,
   iban: iban.nullable(),
   /** Default category for spendings to this counterparty. */
   categoryId: optionalId,
+  /** Case-insensitive part of the name on a statement line; matched before the IBAN. */
+  match: z.string().trim().min(2).max(100).nullable(),
+  mode: counterpartyModeSchema,
   note,
 };
 export const counterpartyCreate = z.strictObject({
   ...counterpartyFields,
   iban: counterpartyFields.iban.optional(),
   categoryId: optionalId.optional(),
+  match: counterpartyFields.match.optional(),
+  mode: counterpartyModeSchema.optional(),
   note: note.optional(),
 });
 export const counterpartyPatch = z.strictObject(counterpartyFields).partial();
@@ -244,6 +258,63 @@ export type SpendingCreate = z.infer<typeof spendingCreate>;
 export type SpendingPatch = z.infer<typeof spendingPatch>;
 export type SpendingDto = z.infer<typeof spendingDto>;
 export type SpendingFilter = z.infer<typeof spendingFilter>;
+
+export const statementImport = z.strictObject({
+  account: accountSchema,
+  /** The ABN AMRO TXT/TAB export as is. */
+  text: z.string().min(1).max(5_000_000),
+});
+export type StatementImport = z.infer<typeof statementImport>;
+
+export const statementLineStatus = z.enum(["open", "spending", "skipped"]);
+export type StatementLineStatus = z.infer<typeof statementLineStatus>;
+
+export const statementLineDto = z.strictObject({
+  id,
+  account: accountSchema,
+  date: isoDate,
+  paidAt: z.string().nullable(),
+  /** Bank sign: negative is money out. */
+  amount: signedEuros,
+  balanceAfter: signedEuros,
+  type: z.string(),
+  name: z.string(),
+  iban: z.string().nullable(),
+  remittance: z.string().nullable(),
+  description: z.string(),
+  counterpartyId: optionalId,
+  spendingId: optionalId,
+  status: statementLineStatus,
+});
+export type StatementLineDto = z.infer<typeof statementLineDto>;
+
+export const statementLineFilter = z.strictObject({
+  status: statementLineStatus.optional(),
+  account: accountSchema.optional(),
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+});
+export type StatementLineFilter = z.infer<typeof statementLineFilter>;
+
+/** skipped: true deletes the line's spending; false reopens it. */
+export const statementLinePatch = z.strictObject({ skipped: z.boolean() });
+export type StatementLinePatch = z.infer<typeof statementLinePatch>;
+
+/** Make a spending from a line; date, amount and counterparty come from the line unless given. */
+export const statementLineSpending = spendingCreate.partial();
+export type StatementLineSpending = z.infer<typeof statementLineSpending>;
+
+export const importResult = z.strictObject({
+  lines: z.int(),
+  added: z.int(),
+  duplicates: z.int(),
+  spendings: z.int(),
+  skipped: z.int(),
+  open: z.int(),
+  balance: balanceDto.nullable(),
+  warnings: z.array(z.string()),
+});
+export type ImportResult = z.infer<typeof importResult>;
 
 function uniqueIds(items: { id?: number }[], ctx: z.RefinementCtx, key: string) {
   const seen = new Set<number>();

@@ -6,8 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import type { CategoryDto, CounterpartyDto } from "@/lib/finance/schemas";
+import type { CategoryDto, CounterpartyDto, CounterpartyMode } from "@/lib/finance/schemas";
 import { useId, useState, useTransition } from "react";
+
+const modes: Record<CounterpartyMode, string> = {
+  spending: "Uitgave",
+  skip: "Overslaan",
+  review: "Per regel kiezen",
+};
 
 /** NL91ABNA0417164300 → NL91 ABNA 0417 1643 00 */
 const formatIban = (iban: string) => iban.replace(/(.{4})/g, "$1 ").trim();
@@ -25,6 +31,8 @@ function CounterpartyForm({
   const [name, setName] = useState(counterparty?.name ?? "");
   const [iban, setIban] = useState(counterparty?.iban ? formatIban(counterparty.iban) : "");
   const [categoryId, setCategoryId] = useState(counterparty?.categoryId == null ? "" : String(counterparty.categoryId));
+  const [match, setMatch] = useState(counterparty?.match ?? "");
+  const [mode, setMode] = useState<CounterpartyMode>(counterparty?.mode ?? "spending");
   const [note, setNote] = useState(counterparty?.note ?? "");
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();
@@ -36,6 +44,8 @@ function CounterpartyForm({
         name,
         iban: iban.trim() || null,
         categoryId: categoryId === "" ? null : Number(categoryId),
+        match: match.trim() || null,
+        mode,
         note: note.trim() || null,
       });
       setResult(response);
@@ -77,13 +87,34 @@ function CounterpartyForm({
           </Select>
         </div>
       </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="space-y-1 sm:col-span-2">
+          <Label htmlFor={`${id}-match`}>Naam op afschrift bevat</Label>
+          <Input
+            id={`${id}-match`}
+            value={match}
+            onChange={(event) => setMatch(event.target.value)}
+            placeholder="Supermarkt (ook Supermarkt 1234)"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-mode`}>Afschriftregels</Label>
+          <Select id={`${id}-mode`} value={mode} onChange={(event) => setMode(event.target.value as CounterpartyMode)}>
+            {Object.entries(modes).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
       <div className="space-y-1">
         <Label htmlFor={`${id}-note`}>Notitie</Label>
         <Input
           id={`${id}-note`}
           value={note}
           onChange={(event) => setNote(event.target.value)}
-          placeholder="Naam op afschrift, pinautomaat, ..."
+          placeholder="Waarom overslaan, ..."
         />
       </div>
       <ResultMessage result={result} />
@@ -141,6 +172,8 @@ export function Counterparties({
                   <p className="text-muted-foreground text-sm">
                     {[
                       counterparty.iban ? formatIban(counterparty.iban) : "Geen IBAN",
+                      counterparty.match && `bevat "${counterparty.match}"`,
+                      modes[counterparty.mode],
                       categories.find((c) => c.id === counterparty.categoryId)?.name,
                       counterparty.note,
                     ]

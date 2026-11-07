@@ -8,6 +8,7 @@ import {
   counterpartyDto,
   counterpartyPatch,
   expenseCreate,
+  importResult,
   expenseDto,
   expensePatch,
   incomeCreate,
@@ -20,6 +21,10 @@ import {
   spendingCreate,
   spendingDto,
   spendingPatch,
+  statementImport,
+  statementLineDto,
+  statementLinePatch,
+  statementLineSpending,
 } from "@/lib/finance/schemas";
 import { z } from "zod";
 
@@ -139,6 +144,56 @@ export function openApiDocument() {
         patch: { tags: ["Category"], summary: "Rename a category", requestBody: body("CategoryCreate"), responses: { "200": ok("Category"), ...errors } },
         delete: { tags: ["Category"], summary: "Delete a category; its spendings and counterparties lose it", responses: { "204": { description: "Deleted" }, ...errors } },
       },
+      "/api/v1/statements": {
+        post: {
+          tags: ["Statement"],
+          summary: "Import an ABN AMRO TXT/TAB export",
+          description:
+            "JSON { account, text }, or the raw export as text/plain with ?account=fixed|current. Lines already imported are skipped, so overlapping exports are fine. Records the last end balance and processes every open line: a matching counterparty (its `match` in the name, else its IBAN) with mode spending makes a spending, skip skips it, review and unmatched lines stay open. Any bad line rejects the whole file.",
+          requestBody: body("StatementImport"),
+          responses: { "201": ok("ImportResult", "Imported"), ...errors },
+        },
+      },
+      "/api/v1/statement-lines": {
+        get: {
+          tags: ["Statement"],
+          summary: "Imported statement lines, newest first",
+          parameters: [
+            { name: "status", in: "query", schema: { type: "string", enum: ["open", "spending", "skipped"] } },
+            { name: "account", in: "query", schema: { type: "string", enum: ["fixed", "current"] } },
+            { name: "from", in: "query", schema: { type: "string", format: "date" }, description: "Inclusive" },
+            { name: "to", in: "query", schema: { type: "string", format: "date" }, description: "Inclusive" },
+          ],
+          responses: { "200": list("StatementLine"), ...errors },
+        },
+      },
+      "/api/v1/statement-lines/process": {
+        post: {
+          tags: ["Statement"],
+          summary: "Process open lines again, e.g. after adding counterparties",
+          responses: { "200": { description: "Counts of new spendings, skipped and still open lines" } },
+        },
+      },
+      "/api/v1/statement-lines/{id}": {
+        parameters: idParam,
+        get: { tags: ["Statement"], summary: "Get a statement line", responses: { "200": ok("StatementLine"), ...errors } },
+        patch: {
+          tags: ["Statement"],
+          summary: "Skip a line (deletes its spending) or reopen it",
+          requestBody: body("StatementLinePatch"),
+          responses: { "200": ok("StatementLine"), ...errors },
+        },
+      },
+      "/api/v1/statement-lines/{id}/spending": {
+        parameters: idParam,
+        post: {
+          tags: ["Statement"],
+          summary: "Make a spending from a line",
+          description: "Every field is optional: date (payment day), amount, description and counterparty come from the line, the category from the counterparty.",
+          requestBody: { required: false, content: { "application/json": { schema: ref("StatementLineSpending") } } },
+          responses: { "201": ok("Spending", "Created"), ...errors, "409": ok("Error", "Line already has a spending") },
+        },
+      },
       "/api/v1/balances": {
         get: {
           tags: ["Balance"],
@@ -179,6 +234,11 @@ export function openApiDocument() {
         Balance: schema(balanceDto),
         BalanceCreate: schema(balanceCreate),
         Config: schema(configSchema),
+        StatementImport: schema(statementImport),
+        ImportResult: schema(importResult),
+        StatementLine: schema(statementLineDto),
+        StatementLinePatch: schema(statementLinePatch),
+        StatementLineSpending: schema(statementLineSpending),
         Error: {
           type: "object",
           properties: {

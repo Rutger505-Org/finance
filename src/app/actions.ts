@@ -16,6 +16,9 @@ import {
   settingsSchema,
   spendingCreate,
   spendingPatch,
+  statementImport,
+  statementLinePatch,
+  statementLineSpending,
   type Issue,
 } from "@/lib/finance/schemas";
 import { repository, today } from "@/server/finance";
@@ -105,12 +108,18 @@ export async function deleteOuting(id: number) {
   return run(() => repository.deleteOuting(id));
 }
 
+/** Open statement lines are matched again, so a new counterparty processes them right away. */
 export async function saveCounterparty(id: number | null, input: unknown) {
-  return run(() =>
-    id === null
-      ? repository.createCounterparty(counterpartyCreate.parse(input))
-      : repository.updateCounterparty(id, counterpartyPatch.parse(input)),
-  );
+  let message: string | undefined;
+  const result = run(() => {
+    if (id === null) repository.createCounterparty(counterpartyCreate.parse(input));
+    else repository.updateCounterparty(id, counterpartyPatch.parse(input));
+    const processed = repository.processStatementLines();
+    if (processed.spendings + processed.skipped > 0) {
+      message = `${processed.spendings} afschriftregels werden uitgaven, ${processed.skipped} overgeslagen`;
+    }
+  });
+  return result.ok ? { ...result, message } : result;
 }
 
 export async function deleteCounterparty(id: number) {
@@ -127,6 +136,30 @@ export async function saveCategory(id: number | null, input: unknown) {
 
 export async function deleteCategory(id: number) {
   return run(() => repository.deleteCategory(id));
+}
+
+export async function importStatement(input: unknown) {
+  let message = "";
+  const result = run(() => {
+    const r = repository.importStatement(statementImport.parse(input));
+    message = [
+      `${r.lines} regels, ${r.added} nieuw (${r.duplicates} al bekend).`,
+      `${r.spendings} nieuwe uitgaven, ${r.skipped} overgeslagen, ${r.open} te verwerken.`,
+      r.balance && `Saldo ${r.balance.amount.toFixed(2).replace(".", ",")} op ${r.balance.date}.`,
+      ...r.warnings,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  });
+  return result.ok ? { ...result, message } : result;
+}
+
+export async function patchStatementLine(id: number, input: unknown) {
+  return run(() => repository.patchStatementLine(id, statementLinePatch.parse(input)));
+}
+
+export async function statementLineToSpending(id: number, input: unknown) {
+  return run(() => repository.statementLineToSpending(id, statementLineSpending.parse(input), today()));
 }
 
 /** Raw JSON from the editor. Returns the stored config (with new ids) on success. */
