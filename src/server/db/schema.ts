@@ -1,4 +1,4 @@
-import type { Account, CounterpartyMode, Cycle, Settings } from "@/lib/finance/schemas";
+import type { Account, Cycle, Settings } from "@/lib/finance/schemas";
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /** Amounts are cents. Cycles are JSON, validated by `cycleSchema` on the way in. */
@@ -80,10 +80,6 @@ export const counterparty = sqliteTable("counterparty", {
   /** Normalised: uppercase, no spaces. */
   iban: text("iban").unique(),
   categoryId: integer("category_id").references(() => category.id, { onDelete: "set null" }),
-  /** Case-insensitive part of the name on a statement line ("Albert Heijn" matches "Albert Heijn 1178"). */
-  match: text("match"),
-  /** What happens to its statement lines: spending, skip (own account, income, fixed cost) or review (stays open). */
-  mode: text("mode").$type<CounterpartyMode>().notNull().default("spending"),
   note: text("note"),
   ...timestamps,
 });
@@ -107,33 +103,4 @@ export const spending = sqliteTable(
     index("spending_date_idx").on(table.date),
     index("spending_outing_idx").on(table.outingId),
   ],
-);
-
-/** One transaction from a bank statement export, kept so re-imports skip it and lines can be processed later. */
-export const statementLine = sqliteTable(
-  "statement_line",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    account: text("account").$type<Account>().notNull(),
-    /** Identifies the line across overlapping exports, see `lineKey`. */
-    key: text("key").notNull().unique(),
-    /** Booking date, YYYY-MM-DD. */
-    date: text("date").notNull(),
-    /** Card or iDEAL payment moment, YYYY-MM-DDTHH:MM. */
-    paidAt: text("paid_at"),
-    /** Bank sign: negative is money out. */
-    amount: integer("amount").notNull(),
-    balanceAfter: integer("balance_after").notNull(),
-    type: text("type").notNull(),
-    name: text("name").notNull(),
-    iban: text("iban"),
-    remittance: text("remittance"),
-    description: text("description").notNull(),
-    counterpartyId: integer("counterparty_id").references(() => counterparty.id, { onDelete: "set null" }),
-    spendingId: integer("spending_id").references(() => spending.id, { onDelete: "set null" }),
-    /** Not a spending: own account, income, fixed cost. */
-    skipped: integer("skipped", { mode: "boolean" }).notNull().default(false),
-    createdAt: timestamps.createdAt,
-  },
-  (table) => [index("statement_line_date_idx").on(table.date), index("statement_line_spending_idx").on(table.spendingId)],
 );

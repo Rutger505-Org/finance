@@ -21,37 +21,27 @@ import {
   type OutingCreate,
   type OutingDto,
   type OutingPatch,
-  type ImportResult,
   type Settings,
   type SpendingCreate,
   type SpendingDto,
   type SpendingFilter,
   type SpendingPatch,
-  type StatementImport,
-  type StatementLineDto,
-  type StatementLineFilter,
-  type StatementLinePatch,
-  type StatementLineSpending,
 } from "@/lib/finance/schemas";
-import { balanceGaps, lineKey, matchCounterparty, parseStatement, spendingDescription, StatementError } from "@/lib/finance/statement";
 import { parseDay } from "@/lib/finance/dates";
 import { HttpError } from "@/server/http-error";
 import * as schema from "@/server/db/schema";
-import { and, asc, desc, eq, gte, isNotNull, isNull, lte, ne, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, ne, notInArray, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 
-const { balance, category, counterparty, expense, income, outing, settings, spending, statementLine } = schema;
+const { balance, category, counterparty, expense, income, outing, settings, spending } = schema;
 
 type Db = BunSQLiteDatabase<typeof schema>;
-/** The database or a transaction on it. */
-type Tx = Pick<Db, "select" | "insert" | "update" | "delete">;
 type IncomeRow = typeof income.$inferSelect;
 type ExpenseRow = typeof expense.$inferSelect;
 type BalanceRow = typeof balance.$inferSelect;
 type OutingRow = typeof outing.$inferSelect;
 type CounterpartyRow = typeof counterparty.$inferSelect;
 type SpendingRow = typeof spending.$inferSelect;
-type StatementLineRow = typeof statementLine.$inferSelect;
 
 const toCents = (euros: number) => Math.round(euros * 100);
 const toEuros = (cents: number) => cents / 100;
@@ -89,15 +79,7 @@ function outingDto(row: OutingRow): OutingDto {
 }
 
 function counterpartyDto(row: CounterpartyRow): CounterpartyDto {
-  return {
-    id: row.id,
-    name: row.name,
-    iban: row.iban,
-    categoryId: row.categoryId,
-    match: row.match,
-    mode: row.mode,
-    note: row.note,
-  };
+  return { id: row.id, name: row.name, iban: row.iban, categoryId: row.categoryId, note: row.note };
 }
 
 function spendingDto(row: SpendingRow): SpendingDto {
@@ -112,31 +94,6 @@ function spendingDto(row: SpendingRow): SpendingDto {
     note: row.note,
   };
 }
-
-function statementLineDto(row: StatementLineRow): StatementLineDto {
-  return {
-    id: row.id,
-    account: row.account,
-    date: row.date,
-    paidAt: row.paidAt,
-    amount: toEuros(row.amount),
-    balanceAfter: toEuros(row.balanceAfter),
-    type: row.type,
-    name: row.name,
-    iban: row.iban,
-    remittance: row.remittance,
-    description: row.description,
-    counterpartyId: row.counterpartyId,
-    spendingId: row.spendingId,
-    status: row.spendingId !== null ? "spending" : row.skipped ? "skipped" : "open",
-  };
-}
-
-const statusWhere = {
-  open: and(isNull(statementLine.spendingId), eq(statementLine.skipped, false)),
-  spending: isNotNull(statementLine.spendingId),
-  skipped: eq(statementLine.skipped, true),
-};
 
 function spendingValues(input: SpendingPatch) {
   return {
@@ -241,73 +198,6 @@ export function createRepository(db: Db) {
     return row ? counterpartyDto(row) : notFound("Counterparty", id);
   }
 
-  /** Without a categoryId the counterparty's default category is used. */
-  function createSpendingIn(tx: Tx, input: SpendingCreate, today: Day): SpendingDto {
-    assertRefs(input);
-    const categoryId =
-      input.categoryId !== undefined
-        ? input.categoryId
-        : input.counterpartyId
-          ? getCounterparty(input.counterpartyId).categoryId
-          : null;
-    const row = tx
-      .insert(spending)
-      .values({
-        date: input.date ?? isoDay(today),
-        amount: toCents(input.amount),
-        description: input.description,
-        categoryId,
-        outingId: input.outingId ?? null,
-        counterpartyId: input.counterpartyId ?? null,
-        note: input.note ?? null,
-      })
-      .returning()
-      .get();
-    return spendingDto(row);
-  }
-
-  /** The day it was paid, not booked: a card payment at 00:30 is booked a day later. */
-  const spendingDate = (row: StatementLineRow) => row.paidAt?.slice(0, 10) ?? row.date;
-
-  /** Matches every open line to a counterparty and applies its mode. */
-  function processOpenLines(tx: Tx): Pick<ImportResult, "spendings" | "skipped" | "open"> {
-    const counterparties = tx.select().from(counterparty).all();
-    const open = tx.select().from(statementLine).where(statusWhere.open).orderBy(asc(statementLine.id)).all();
-    let spendings = 0;
-    let skipped = 0;
-    for (const row of open) {
-      const match = matchCounterparty(row, counterparties);
-      if (match?.id !== row.counterpartyId) {
-        tx.update(statementLine).set({ counterpartyId: match?.id ?? null }).where(eq(statementLine.id, row.id)).run();
-      }
-      if (!match || match.mode === "review") continue;
-      if (match.mode === "skip") {
-        tx.update(statementLine).set({ skipped: true }).where(eq(statementLine.id, row.id)).run();
-        skipped++;
-        continue;
-      }
-      const created = tx
-        .insert(spending)
-        .values({
-          date: spendingDate(row),
-          amount: -row.amount,
-          description: spendingDescription(row),
-          categoryId: match.categoryId,
-          counterpartyId: match.id,
-        })
-        .returning({ id: spending.id })
-        .get();
-      tx.update(statementLine).set({ spendingId: created.id }).where(eq(statementLine.id, row.id)).run();
-      spendings++;
-    }
-    return { spendings, skipped, open: open.length - spendings - skipped };
-  }
-
-  function getStatementLine(id: number): StatementLineDto {
-    const row = db.select().from(statementLine).where(eq(statementLine.id, id)).get();
-    return row ? statementLineDto(row) : notFound("Statement line", id);
-  }
-
   function getSpending(id: number): SpendingDto {
     const row = db.select().from(spending).where(eq(spending.id, id)).get();
     return row ? spendingDto(row) : notFound("Spending", id);
@@ -395,8 +285,6 @@ export function createRepository(db: Db) {
             name: input.name,
             iban: input.iban ?? null,
             categoryId: input.categoryId ?? null,
-            match: input.match ?? null,
-            mode: input.mode ?? "spending",
             note: input.note ?? null,
           })
           .returning()
@@ -419,7 +307,6 @@ export function createRepository(db: Db) {
     deleteCounterparty(id: number): void {
       db.transaction((tx) => {
         tx.update(spending).set({ counterpartyId: null }).where(eq(spending.counterpartyId, id)).run();
-        tx.update(statementLine).set({ counterpartyId: null }).where(eq(statementLine.counterpartyId, id)).run();
         const row = tx.delete(counterparty).where(eq(counterparty.id, id)).returning().get();
         if (!row) notFound("Counterparty", id);
       });
@@ -446,141 +333,36 @@ export function createRepository(db: Db) {
     getSpending,
     /** Without a categoryId the counterparty's default category is used. */
     createSpending(input: SpendingCreate, today: Day): SpendingDto {
-      return createSpendingIn(db, input, today);
+      assertRefs(input);
+      const categoryId =
+        input.categoryId !== undefined
+          ? input.categoryId
+          : input.counterpartyId
+            ? getCounterparty(input.counterpartyId).categoryId
+            : null;
+      const row = db
+        .insert(spending)
+        .values({
+          date: input.date ?? isoDay(today),
+          amount: toCents(input.amount),
+          description: input.description,
+          categoryId,
+          outingId: input.outingId ?? null,
+          counterpartyId: input.counterpartyId ?? null,
+          note: input.note ?? null,
+        })
+        .returning()
+        .get();
+      return spendingDto(row);
     },
     updateSpending(id: number, patch: SpendingPatch): SpendingDto {
       assertRefs(patch);
       const row = db.update(spending).set(spendingValues(patch)).where(eq(spending.id, id)).returning().get();
       return row ? spendingDto(row) : notFound("Spending", id);
     },
-    /** A statement line it came from becomes skipped, so a later import doesn't bring it back. */
     deleteSpending(id: number): void {
-      db.transaction((tx) => {
-        tx.update(statementLine).set({ spendingId: null, skipped: true }).where(eq(statementLine.spendingId, id)).run();
-        const row = tx.delete(spending).where(eq(spending.id, id)).returning().get();
-        if (!row) notFound("Spending", id);
-      });
-    },
-
-    /**
-     * Stores new lines (overlapping exports are fine), records the latest
-     * balance and processes every open line. All or nothing.
-     */
-    importStatement(input: StatementImport): ImportResult {
-      let lines;
-      try {
-        lines = parseStatement(input.text);
-      } catch (error) {
-        if (error instanceof StatementError) throw new HttpError(400, error.message);
-        throw error;
-      }
-      return db.transaction((tx) => {
-        let added = 0;
-        for (const line of lines) {
-          const inserted = tx
-            .insert(statementLine)
-            .values({
-              account: input.account,
-              key: lineKey(line),
-              date: line.date,
-              paidAt: line.details.paidAt,
-              amount: line.amount,
-              balanceAfter: line.balanceAfter,
-              type: line.details.type,
-              name: line.details.name,
-              iban: line.details.iban,
-              remittance: line.details.remittance,
-              description: line.description,
-              // Only the current account has one-off spendings.
-              skipped: input.account !== "current",
-            })
-            .onConflictDoNothing({ target: statementLine.key })
-            .returning({ id: statementLine.id })
-            .get();
-          if (inserted) added++;
-        }
-
-        const last = lines.reduce((latest, line) => (line.date >= latest.date ? line : latest));
-        const known = tx
-          .select()
-          .from(balance)
-          .where(and(eq(balance.account, input.account), eq(balance.date, last.date), eq(balance.amount, last.balanceAfter)))
-          .get();
-        const balanceRow =
-          known ??
-          tx.insert(balance).values({ account: input.account, date: last.date, amount: last.balanceAfter }).returning().get();
-
-        const processed = processOpenLines(tx);
-        return {
-          lines: lines.length,
-          added,
-          duplicates: lines.length - added,
-          ...processed,
-          balance: balanceDto(balanceRow),
-          warnings: balanceGaps(lines),
-        };
-      });
-    },
-
-    /** After adding or changing counterparties: open lines with a matching counterparty become spendings or skipped. */
-    processStatementLines(): Pick<ImportResult, "spendings" | "skipped" | "open"> {
-      return db.transaction((tx) => processOpenLines(tx));
-    },
-
-    /** Newest first. */
-    listStatementLines(filter: StatementLineFilter = {}): StatementLineDto[] {
-      return db
-        .select()
-        .from(statementLine)
-        .where(
-          and(
-            filter.status ? statusWhere[filter.status] : undefined,
-            filter.account ? eq(statementLine.account, filter.account) : undefined,
-            filter.from ? gte(statementLine.date, filter.from) : undefined,
-            filter.to ? lte(statementLine.date, filter.to) : undefined,
-          ),
-        )
-        .orderBy(desc(statementLine.date), desc(statementLine.id))
-        .all()
-        .map(statementLineDto);
-    },
-    getStatementLine,
-    /** skipped: true removes its spending, false reopens it (an open line is processed again on the next import). */
-    patchStatementLine(id: number, patch: StatementLinePatch): StatementLineDto {
-      return db.transaction((tx) => {
-        const row = tx.select().from(statementLine).where(eq(statementLine.id, id)).get() ?? notFound("Statement line", id);
-        if (row.spendingId !== null) tx.delete(spending).where(eq(spending.id, row.spendingId)).run();
-        const updated = tx
-          .update(statementLine)
-          .set({ skipped: patch.skipped, spendingId: null })
-          .where(eq(statementLine.id, id))
-          .returning()
-          .get();
-        return statementLineDto(updated);
-      });
-    },
-    /** Line → spending. Fields not given come from the line and its counterparty. */
-    statementLineToSpending(id: number, input: StatementLineSpending, today: Day): SpendingDto {
-      return db.transaction((tx) => {
-        const row = tx.select().from(statementLine).where(eq(statementLine.id, id)).get() ?? notFound("Statement line", id);
-        if (row.spendingId !== null) throw new HttpError(409, `Statement line ${id} already has spending ${row.spendingId}`);
-        if (row.account !== "current") throw new HttpError(409, "Only current-account lines can become spendings");
-        const created = createSpendingIn(
-          tx,
-          {
-            date: input.date ?? spendingDate(row),
-            amount: input.amount ?? -toEuros(row.amount),
-            description: input.description ?? spendingDescription(row),
-            counterpartyId: input.counterpartyId !== undefined ? input.counterpartyId : row.counterpartyId,
-            ...(input.categoryId !== undefined && { categoryId: input.categoryId }),
-            outingId: input.outingId,
-            note: input.note,
-          },
-          today,
-        );
-        tx.update(statementLine).set({ spendingId: created.id, skipped: false }).where(eq(statementLine.id, id)).run();
-        return created;
-      });
+      const row = db.delete(spending).where(eq(spending.id, id)).returning().get();
+      if (!row) notFound("Spending", id);
     },
 
     listIncomes(): IncomeDto[] {

@@ -26,7 +26,6 @@ const links = [
   { href: "/", label: "Overzicht" },
   { href: "/posten", label: "Posten" },
   { href: "/uitgaven", label: "Uitgaven" },
-  { href: "/afschriften", label: "Afschriften" },
   { href: "/uitjes", label: "Uitjes" },
   { href: "/tegenrekeningen", label: "Tegenrekeningen" },
   { href: "/json", label: "JSON" },

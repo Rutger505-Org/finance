@@ -5,8 +5,6 @@ import { counterpartyCreate } from "@/lib/finance/schemas";
 import * as schema from "@/server/db/schema";
 import { HttpError } from "@/server/http-error";
 import { drizzle } from "drizzle-orm/bun-sqlite";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { createRepository, type Repository } from "./repository";
 
@@ -171,63 +169,5 @@ describe("repository", () => {
       "2026-11-30",
       "2026-11-01",
     ]);
-  });
-
-  describe("statements", () => {
-    const text = readFileSync(join(import.meta.dir, "../../lib/finance/fixtures/abn-amro.tab"), "utf8");
-
-    test("import stores lines once, records the balance and leaves unknown lines open", () => {
-      const first = repository.importStatement({ account: "current", text });
-      expect(first).toMatchObject({ lines: 6, added: 6, duplicates: 0, spendings: 0, skipped: 0, open: 6, warnings: [] });
-      expect(first.balance).toMatchObject({ account: "current", date: "2026-03-03", amount: 1058.6 });
-      const again = repository.importStatement({ account: "current", text });
-      expect(again).toMatchObject({ added: 0, duplicates: 6, open: 6 });
-      expect(repository.listBalances()).toHaveLength(1);
-    });
-
-    test("counterparty modes: spending, skip, review", () => {
-      const food = repository.listCategories().find((c) => c.name === "Eten")!;
-      repository.createCounterparty({ name: "Supermarkt", match: "supermarkt", categoryId: food.id });
-      repository.createCounterparty({ name: "Werkgever", iban: "NL91ABNA0417164300", mode: "skip" });
-      repository.createCounterparty({ name: "Tikkie", match: "via Tikkie", mode: "review" });
-      const result = repository.importStatement({ account: "current", text });
-      expect(result).toMatchObject({ spendings: 1, skipped: 2, open: 3 });
-
-      const [spending] = repository.listSpendings();
-      expect(spending).toMatchObject({ date: "2026-03-01", amount: 4.5, description: "Supermarkt 12", categoryId: food.id });
-      const open = repository.listStatementLines({ status: "open" });
-      expect(open.map((line) => line.name)).toContain("Vriend via Tikkie");
-    });
-
-    test("line to spending uses the payment day; deleting the spending skips the line", () => {
-      repository.importStatement({ account: "current", text });
-      const cafe = repository.listStatementLines().find((line) => line.name === "Café De Hoek")!;
-      const spending = repository.statementLineToSpending(cafe.id, {}, today);
-      expect(spending).toMatchObject({ date: "2026-03-03", amount: 3, description: "Café De Hoek" });
-      expect(() => repository.statementLineToSpending(cafe.id, {}, today)).toThrow(HttpError);
-
-      repository.deleteSpending(spending.id);
-      expect(repository.getStatementLine(cafe.id).status).toBe("skipped");
-      repository.createCounterparty({ name: "Café", match: "De Hoek" });
-      repository.processStatementLines();
-      expect(repository.listSpendings()).toHaveLength(0);
-
-      expect(repository.patchStatementLine(cafe.id, { skipped: false }).status).toBe("open");
-      expect(repository.processStatementLines().spendings).toBe(1);
-      expect(repository.patchStatementLine(cafe.id, { skipped: true }).status).toBe("skipped");
-      expect(repository.listSpendings()).toHaveLength(0);
-    });
-
-    test("fixed-account lines are never spendings", () => {
-      repository.createCounterparty({ name: "Supermarkt", match: "supermarkt" });
-      const result = repository.importStatement({ account: "fixed", text });
-      expect(result).toMatchObject({ spendings: 0, open: 0 });
-      expect(repository.listBalances({ account: "fixed" })).toHaveLength(1);
-    });
-
-    test("a bad file is a 400 and stores nothing", () => {
-      expect(() => repository.importStatement({ account: "current", text: "nonsense" })).toThrow(HttpError);
-      expect(repository.listStatementLines()).toHaveLength(0);
-    });
   });
 });
