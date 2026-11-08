@@ -28,7 +28,6 @@ const links = [
   { href: "/uitgaven", label: "Uitgaven" },
   { href: "/uitjes", label: "Uitjes" },
   { href: "/tegenrekeningen", label: "Tegenrekeningen" },
-  { href: "/json", label: "JSON" },
 ];
 
 export default function RootLayout({

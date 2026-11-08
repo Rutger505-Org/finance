@@ -3,7 +3,6 @@
 import {
   balanceCreate,
   categoryCreate,
-  configSchema,
   counterpartyCreate,
   counterpartyPatch,
   expenseCreate,
@@ -127,17 +126,4 @@ export async function saveCategory(id: number | null, input: unknown) {
 
 export async function deleteCategory(id: number) {
   return run(() => repository.deleteCategory(id));
-}
-
-/** Raw JSON from the editor. Returns the stored config (with new ids) on success. */
-export async function saveConfig(text: string): Promise<ActionResult & { config?: string }> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    return { ok: false, error: `Geen geldige JSON: ${(error as Error).message}` };
-  }
-  const result = run(() => repository.replaceConfig(configSchema.parse(parsed)), "Opgeslagen");
-  if (!result.ok) return result;
-  return { ...result, config: JSON.stringify(repository.getConfig(), null, 2) };
 }

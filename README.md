@@ -57,4 +57,4 @@ Work happens on `main`; every push deploys production through the shared workflo
 
 ## Checking automatic surplus transfers
 
-The user periodically exports bank-statement transactions for both the current and fixed-costs accounts. Compare those transactions with the configured incomes, expenses and automatic transfer amount in the JSON config (/json) to validate that surplus transfers are set up correctly. The balance-entry page is not part of this workflow; do not ask the user to manually enter balances. Treat statement exports as sensitive financial data and only use them for the requested check.
+The user periodically exports bank-statement transactions for both the current and fixed-costs accounts. Compare those transactions with the configured incomes, expenses and automatic transfer amount in the config (`GET /api/v1/config`) to validate that surplus transfers are set up correctly. The balance-entry page is not part of this workflow; do not ask the user to manually enter balances. Treat statement exports as sensitive financial data and only use them for the requested check.
