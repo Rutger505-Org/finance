@@ -18,7 +18,7 @@ Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`m
 
 ## Using it
 
-- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Posten (incomes, expenses, transfers), Uitgaven (one-off spendings per month, `?maand=YYYY-MM`), Uitjes (outings with totals per category), Tegenrekeningen (counterparties and categories), JSON (the whole config as one document: copy, paste, save).
+- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Inkomsten and Vaste lasten (each with the transfers to the fixed-costs account), Uitgaven with subpages: per maand (`?maand=YYYY-MM`), Uitjes (outings with totals per category), Tegenrekeningen, Categorieën.
 - **API:** `/api/v1`, spec at `/api/v1/openapi.json`. Amounts are euros (max 2 decimals), dates `YYYY-MM-DD`.
   - `GET /overview?date=&days=`
   - `GET|PUT /config`: settings + incomes + expenses. Items with an `id` are updated, without one created, missing ones deleted. Balances are not touched.

@@ -5,6 +5,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { type ReactNode } from "react";
+import { NavLink } from "./_components/nav-link";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -18,16 +19,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Financiën",
+  title: { default: "Financiën", template: "%s · Financiën" },
   description: "Vaste lasten, overboekingen en vrij besteedbaar geld",
 };
 
 const links = [
   { href: "/", label: "Overzicht" },
-  { href: "/posten", label: "Posten" },
-  { href: "/uitgaven", label: "Uitgaven" },
-  { href: "/uitjes", label: "Uitjes" },
-  { href: "/tegenrekeningen", label: "Tegenrekeningen" },
+  { href: "/inkomsten", label: "Inkomsten" },
+  { href: "/vaste-lasten", label: "Vaste lasten" },
+  { href: "/uitgaven", label: "Uitgaven", prefix: true },
 ];
 
 export default function RootLayout({
@@ -45,13 +45,16 @@ export default function RootLayout({
             </Link>
             <div className="flex flex-wrap gap-4 text-sm">
               {links.map((link) => (
-                <Link key={link.href} href={link.href} className="text-muted-foreground hover:text-foreground">
+                <NavLink
+                  key={link.href}
+                  href={link.href}
+                  prefix={link.prefix}
+                  className="text-muted-foreground hover:text-foreground"
+                  activeClassName="text-foreground font-medium"
+                >
                   {link.label}
-                </Link>
+                </NavLink>
               ))}
-              <a href="/api/v1/openapi.json" className="text-muted-foreground hover:text-foreground">
-                API
-              </a>
             </div>
           </nav>
         </header>

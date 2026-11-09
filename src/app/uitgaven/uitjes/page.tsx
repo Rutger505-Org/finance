@@ -4,9 +4,12 @@ import { isoDay, parseDay } from "@/lib/finance/dates";
 import { sum, totalsBy } from "@/lib/finance/spending";
 import { dateLong, money } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
+import type { Metadata } from "next";
 import { OutingActions, OutingForm } from "./_components/outing-form";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Uitjes" };
 
 const cents = (euros: number) => Math.round(euros * 100);
 
@@ -23,12 +26,9 @@ export default function OutingsPage() {
 
   return (
     <>
-      <div>
-        <h1 className="text-2xl font-semibold">Uitjes</h1>
-        <p className="text-muted-foreground">
-          Feestjes en avonden uit, met alles wat erbij hoort: ook het ticket van maanden ervoor.
-        </p>
-      </div>
+      <p className="text-muted-foreground">
+        Feestjes en avonden uit, met alles wat erbij hoort: ook het ticket van maanden ervoor.
+      </p>
 
       <Card>
         <CardHeader>

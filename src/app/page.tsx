@@ -4,9 +4,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { isValidIsoDate, parseDay } from "@/lib/finance/dates";
 import { dateLong, money, relativeDate } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
+import type { Metadata } from "next";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: { absolute: "Overzicht · Financiën" } };
 
 export default async function OverviewPage({
   searchParams,
@@ -56,9 +59,9 @@ export default async function OverviewPage({
         <CardContent>
           {expenses.length === 0 ? (
             <p className="text-muted-foreground text-sm">
-              Nog geen vaste lasten ingevoerd. Voeg posten toe bij{" "}
-              <Link href="/posten" className="underline">
-                Posten
+              Nog geen vaste lasten ingevoerd. Voeg ze toe bij{" "}
+              <Link href="/vaste-lasten" className="underline">
+                Vaste lasten
               </Link>
               .
             </p>

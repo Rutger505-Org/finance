@@ -5,11 +5,14 @@ import { isoDay } from "@/lib/finance/dates";
 import { isValidMonth, monthRange, sum, totalsBy } from "@/lib/finance/spending";
 import { money, monthLabel } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { SpendingForm } from "./_components/spending-form";
 import { SpendingList } from "./_components/spending-list";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Uitgaven" };
 
 const cents = (euros: number) => Math.round(euros * 100);
 
@@ -38,10 +41,7 @@ export default async function SpendingPage({
   return (
     <>
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Uitgaven</h1>
-          <p className="text-muted-foreground first-letter:uppercase">{monthLabel(month)}</p>
-        </div>
+        <h2 className="text-xl font-semibold first-letter:uppercase">{monthLabel(month)}</h2>
         <MonthNav path="/uitgaven" month={month} current={current} />
       </div>
 
@@ -82,7 +82,7 @@ export default async function SpendingPage({
             <CardTitle>Per uitje</CardTitle>
             <CardDescription>
               Alleen wat in deze maand viel. Totalen over alle maanden staan bij{" "}
-              <Link href="/uitjes" className="underline">
+              <Link href="/uitgaven/uitjes" className="underline">
                 Uitjes
               </Link>
               .
