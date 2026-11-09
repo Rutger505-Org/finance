@@ -35,6 +35,7 @@ export function SpendingForm({
 }) {
   const id = useId();
   const [date, setDate] = useState(spending?.date ?? today);
+  const [time, setTime] = useState(spending?.time ?? "");
   const [amount, setAmount] = useState(spending ? amountText(spending.amount) : "");
   const [description, setDescription] = useState(spending?.description ?? "");
   const [categoryId, setCategoryId] = useState(text(spending?.categoryId));
@@ -73,6 +74,7 @@ export function SpendingForm({
       }
       const response = await saveSpending(spending?.id ?? null, {
         date,
+        time: time || null,
         amount: value,
         description,
         categoryId: idOrNull(categoryId),
@@ -84,7 +86,7 @@ export function SpendingForm({
       if (!response.ok) return;
       if (spending) onDone?.();
       else {
-        // Keep date, outing and category: the next drink of the same night is one amount away.
+        // Keep date, time, outing and category: the next drink of the same night is one amount away.
         setAmount("");
         setDescription("");
         setNote("");
@@ -94,10 +96,14 @@ export function SpendingForm({
 
   return (
     <form onSubmit={submit} className="space-y-3 rounded-md border bg-muted/30 p-4">
-      <div className="grid gap-3 sm:grid-cols-[10rem_8rem_1fr]">
+      <div className="grid gap-3 sm:grid-cols-[10rem_7rem_8rem_1fr]">
         <div className="space-y-1">
           <Label htmlFor={`${id}-date`}>Datum</Label>
           <Input id={`${id}-date`} type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-time`}>Tijd</Label>
+          <Input id={`${id}-time`} type="time" value={time} onChange={(event) => setTime(event.target.value)} />
         </div>
         <div className="space-y-1">
           <Label htmlFor={`${id}-amount`}>Bedrag (€)</Label>

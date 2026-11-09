@@ -10,7 +10,7 @@ Overview of fixed costs, the transfers to the fixed-costs account and what's fre
 - **Free to spend:** latest current-account balance + incomes until the next payment of the main income − transfers in that period. Refunds don't count, that money is already spent on its expense.
 - **Balances:** the overview uses the latest balance per account up to that day. The fixed-costs balance is projected to today with the planned movements since then.
 
-- **One-off spendings:** date, amount (negative = money back, e.g. a Tikkie), description. Category = what it was on (Drinken, Eten, ...; editable, seeded by the migration). Outing = what it was for (a party); spendings on other days, like a ticket bought months earlier, belong to it too.
+- **One-off spendings:** date, time (`HH:MM`, optional: payment time from the statement line), amount (negative = money back, e.g. a Tikkie), description. Category = what it was on (Drinken, Eten, ...; editable, seeded by the migration). Outing = what it was for (a party); spendings on other days, like a ticket bought months earlier, belong to it too.
 - **Counterparties:** what is known about who is behind a bank statement line: real name, IBANs and parts of the name on the line (aliases, each belongs to one counterparty), default category, handling (`spending`; `skip` for fixed costs, own accounts, income; `ask` when it depends on the line) and a note. A new spending to a counterparty without a category gets its default.
 - **Bookings:** the app doesn't import statements. An agent reads the export and books it through the API: each booking turns one or more statement lines into one spending, or skips them with a reason. Only the line key (account|date|balance before|balance after|description), date and amount are kept, so an overlapping export never books a line twice. Deleting a spending frees its lines.
 
@@ -19,7 +19,7 @@ Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`m
 ## Using it
 
 - **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Inkomsten and Vaste lasten (each with the transfers to the fixed-costs account), Uitgaven with subpages: per maand (`?maand=YYYY-MM`), Uitjes (outings with totals per category), Tegenrekeningen, Categorieën.
-- **API:** `/api/v1`, spec at `/api/v1/openapi.json`. Amounts are euros (max 2 decimals), dates `YYYY-MM-DD`.
+- **API:** `/api/v1`, spec at `/api/v1/openapi.json`. Amounts are euros (max 2 decimals), dates `YYYY-MM-DD`, times `HH:MM`.
   - `GET /overview?date=&days=`
   - `GET|PUT /config`: settings + incomes + expenses. Items with an `id` are updated, without one created, missing ones deleted. Balances are not touched.
   - `GET|POST /incomes`, `GET|PATCH|DELETE /incomes/{id}`, same for `/expenses`

@@ -11,6 +11,9 @@ export const isoDate = z
   .string()
   .refine(isValidIsoDate, { message: "Expected a date as YYYY-MM-DD" });
 
+/** HH:MM, 24h. */
+export const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "Expected a time as HH:MM" });
+
 export const euros = z
   .number()
   .min(0)
@@ -243,6 +246,8 @@ export type CounterpartyDto = z.infer<typeof counterpartyDto>;
 
 const spendingFields = {
   date: isoDate,
+  /** Payment time on `date`, null when unknown. */
+  time: clockTime.nullable(),
   /** Negative is money back, e.g. a Tikkie from a friend. */
   amount: signedEuros.refine((value) => value !== 0, { message: "Bedrag mag niet 0 zijn" }),
   description: z.string().trim().min(1).max(200),
@@ -255,6 +260,7 @@ export const spendingCreate = z.strictObject({
   ...spendingFields,
   /** Defaults to today. */
   date: isoDate.optional(),
+  time: clockTime.nullable().optional(),
   /** Omitted: the counterparty's default category. */
   categoryId: optionalId.optional(),
   outingId: optionalId.optional(),

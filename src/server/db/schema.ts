@@ -110,6 +110,8 @@ export const spending = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     /** YYYY-MM-DD */
     date: text("date").notNull(),
+    /** HH:MM payment time, null when unknown (iDEAL/SEPA lines without one, manual entries). */
+    time: text("time"),
     amount: integer("amount").notNull(),
     description: text("description").notNull(),
     categoryId: integer("category_id").references(() => category.id, { onDelete: "set null" }),

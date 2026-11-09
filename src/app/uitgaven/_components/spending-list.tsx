@@ -58,7 +58,12 @@ export function SpendingList({
                 ) : (
                   <div className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 sm:flex">
                     <div className="min-w-0 sm:flex-1">
-                      <p className="font-medium">{spending.description}</p>
+                      <p className="font-medium">
+                        {spending.time && (
+                          <span className="text-muted-foreground mr-2 font-normal tabular-nums">{spending.time}</span>
+                        )}
+                        {spending.description}
+                      </p>
                       <p className="text-muted-foreground text-sm">
                         {[
                           name(lookups.categories, spending.categoryId) ?? "Geen categorie",

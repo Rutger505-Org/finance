@@ -36,6 +36,13 @@
       "when": 1794085535801,
       "tag": "0004_counterparty_aliases_booked_lines",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1794203227328,
+      "tag": "0005_spending_time",
+      "breakpoints": true
     }
   ]
 }

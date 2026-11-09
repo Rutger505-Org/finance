@@ -223,4 +223,13 @@ describe("repository", () => {
       "2026-11-01",
     ]);
   });
+
+  test("spendings keep their time, latest first within a day, unknown time last", () => {
+    for (const time of ["19:47", null, "23:02", undefined]) {
+      repository.createSpending({ description: String(time), amount: 1, date: "2026-11-01", time }, today);
+    }
+    const created = repository.createSpending({ description: "x", amount: 1, date: "2026-11-02", time: "08:15" }, today);
+    expect(repository.updateSpending(created.id, { time: null }).time).toBeNull();
+    expect(repository.listSpendings({ to: "2026-11-01" }).map((s) => s.time)).toEqual(["23:02", "19:47", null, null]);
+  });
 });

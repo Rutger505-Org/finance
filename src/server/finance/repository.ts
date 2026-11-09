@@ -112,6 +112,7 @@ function spendingDto(row: SpendingRow): SpendingDto {
   return {
     id: row.id,
     date: row.date,
+    time: row.time,
     amount: toEuros(row.amount),
     description: row.description,
     categoryId: row.categoryId,
@@ -240,6 +241,7 @@ export function createRepository(db: Db) {
       .insert(spending)
       .values({
         date: input.date ?? isoDay(today),
+        time: input.time ?? null,
         amount: toCents(input.amount),
         description: input.description,
         categoryId,
@@ -391,7 +393,7 @@ export function createRepository(db: Db) {
       });
     },
 
-    /** Newest first. */
+    /** Newest first; within a day by time, unknown time last. */
     listSpendings(filter: SpendingFilter = {}): SpendingDto[] {
       return db
         .select()
@@ -405,7 +407,7 @@ export function createRepository(db: Db) {
             filter.counterpartyId ? eq(spending.counterpartyId, filter.counterpartyId) : undefined,
           ),
         )
-        .orderBy(desc(spending.date), desc(spending.id))
+        .orderBy(desc(spending.date), sql`${spending.time} is null`, desc(spending.time), desc(spending.id))
         .all()
         .map(spendingDto);
     },

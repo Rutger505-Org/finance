@@ -1,0 +1,1 @@
+ALTER TABLE `spending` ADD `time` text;
