@@ -1,4 +1,4 @@
-import type { Account, CounterpartyHandling, Cycle, Settings } from "@/lib/finance/schemas";
+import type { Account, CounterpartyHandling, Cycle, Savings, Settings } from "@/lib/finance/schemas";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /** Amounts are cents. Cycles are JSON, validated by `cycleSchema` on the way in. */
@@ -13,6 +13,20 @@ const timestamps = {
     .notNull(),
 };
 
+/**
+ * A situation to compare (e.g. after a move). Exactly one is real: the overview and transfers use it.
+ * Incomes and expenses list the scenarios they belong to, or null for all.
+ */
+export const scenario = sqliteTable("scenario", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+  real: integer("real", { mode: "boolean" }).notNull().default(false),
+  ...timestamps,
+});
+
+/** Null: in every scenario. */
+const scenarioIds = () => text("scenario_ids", { mode: "json" }).$type<number[] | null>();
+
 export const income = sqliteTable("income", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
@@ -20,6 +34,7 @@ export const income = sqliteTable("income", {
   cycle: text("cycle", { mode: "json" }).$type<Cycle>().notNull(),
   main: integer("main", { mode: "boolean" }).notNull().default(false),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
+  scenarioIds: scenarioIds(),
   note: text("note"),
   ...timestamps,
 });
@@ -31,6 +46,7 @@ export const expense = sqliteTable("expense", {
   cycle: text("cycle", { mode: "json" }).$type<Cycle>().notNull(),
   account: text("account").$type<Account>().notNull(),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
+  scenarioIds: scenarioIds(),
   note: text("note"),
   ...timestamps,
 });
@@ -53,6 +69,13 @@ export const settings = sqliteTable("settings", {
   id: integer("id").primaryKey(),
   /** Amounts in euros, as in `settingsSchema`. */
   transfers: text("transfers", { mode: "json" }).$type<Settings["transfers"]>().notNull(),
+  updatedAt: timestamps.updatedAt,
+});
+
+/** A single row (id 1): the savings account and what it still has to pay. Amounts in euros, as in `savingsSchema`. */
+export const savings = sqliteTable("savings", {
+  id: integer("id").primaryKey(),
+  plan: text("plan", { mode: "json" }).$type<Savings>().notNull(),
   updatedAt: timestamps.updatedAt,
 });
 

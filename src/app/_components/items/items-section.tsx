@@ -9,6 +9,7 @@ import { Select } from "@/components/ui/select";
 import { moneyEuros } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useId, useMemo, useState, useTransition } from "react";
+import type { ScenarioDto } from "@/lib/finance/schemas";
 import { ItemForm, type Item, type ItemKind } from "./item-form";
 
 export interface ItemRow {
@@ -47,12 +48,21 @@ export function ItemsSection({
   title,
   rows,
   today,
+  scenarios,
+  selected,
 }: {
   kind: ItemKind;
   title: string;
   rows: ItemRow[];
   today: string;
+  scenarios: ScenarioDto[];
+  selected: ScenarioDto;
 }) {
+  const scenarioNames = (ids: number[]) =>
+    scenarios
+      .filter((s) => ids.includes(s.id))
+      .map((s) => s.name)
+      .join(", ");
   const id = useId();
   const [sort, setSort] = useState<Sort>("next");
   const [until, setUntil] = useState("");
@@ -93,7 +103,7 @@ export function ItemsSection({
       </CardHeader>
       <CardContent className="space-y-3">
         {editing === "new" && (
-          <ItemForm kind={kind} onDone={() => setEditing(null)} />
+          <ItemForm kind={kind} scenarios={scenarios} newIn={selected} onDone={() => setEditing(null)} />
         )}
         <ResultMessage result={result} />
         {rows.length > 0 && (
@@ -172,6 +182,8 @@ export function ItemsSection({
                 <ItemForm
                   kind={kind}
                   item={row.item}
+                  scenarios={scenarios}
+                  newIn={selected}
                   onDone={() => setEditing(null)}
                 />
               ) : (
@@ -187,6 +199,11 @@ export function ItemsSection({
                       {!row.item.active && (
                         <span className="ml-2 text-xs font-normal">
                           (inactief)
+                        </span>
+                      )}
+                      {row.item.scenarioIds && scenarios.length > 1 && (
+                        <span className="ml-2 rounded bg-sky-100 px-1.5 py-0.5 text-xs font-normal text-sky-800">
+                          alleen {scenarioNames(row.item.scenarioIds)}
                         </span>
                       )}
                       {"main" in row.item && row.item.main && (

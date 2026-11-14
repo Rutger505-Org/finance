@@ -67,6 +67,15 @@ export type Account = z.infer<typeof accountSchema>;
 
 const name = z.string().trim().min(1).max(100);
 const note = z.string().max(1000).nullable();
+const id = z.int().positive();
+
+/** The scenarios an income or expense belongs to; null = all of them. */
+export const scenarioIdsSchema = z
+  .array(id)
+  .min(1)
+  .max(50)
+  .refine((ids) => new Set(ids).size === ids.length, { message: "Dubbele situatie" })
+  .nullable();
 
 const incomeFields = {
   name,
@@ -75,6 +84,7 @@ const incomeFields = {
   /** The main income sets the spending period: until its next payment. */
   main: z.boolean(),
   active: z.boolean(),
+  scenarioIds: scenarioIdsSchema,
   note,
 };
 
@@ -84,15 +94,15 @@ const expenseFields = {
   cycle: cycleSchema,
   account: accountSchema,
   active: z.boolean(),
+  scenarioIds: scenarioIdsSchema,
   note,
 };
-
-const id = z.int().positive();
 
 export const incomeCreate = z.strictObject({
   ...incomeFields,
   main: incomeFields.main.optional(),
   active: incomeFields.active.optional(),
+  scenarioIds: scenarioIdsSchema.optional(),
   note: note.optional(),
 });
 export const incomePatch = z.strictObject(incomeFields).partial();
@@ -104,6 +114,7 @@ export type IncomeDto = z.infer<typeof incomeDto>;
 export const expenseCreate = z.strictObject({
   ...expenseFields,
   active: expenseFields.active.optional(),
+  scenarioIds: scenarioIdsSchema.optional(),
   note: note.optional(),
 });
 export const expensePatch = z.strictObject(expenseFields).partial();
@@ -111,6 +122,35 @@ export const expenseDto = z.strictObject({ id, ...expenseFields });
 export type ExpenseCreate = z.infer<typeof expenseCreate>;
 export type ExpensePatch = z.infer<typeof expensePatch>;
 export type ExpenseDto = z.infer<typeof expenseDto>;
+
+/** A situation to compare. The real one is what the overview and transfers use; there is always exactly one. */
+const scenarioFields = { name: z.string().trim().min(1).max(50), real: z.boolean() };
+export const scenarioCreate = z.strictObject({ ...scenarioFields, real: scenarioFields.real.optional() });
+/** `real: true` makes this the real scenario; the real flag can't be switched off directly. */
+export const scenarioPatch = z.strictObject(scenarioFields).partial();
+export const scenarioDto = z.strictObject({ id, ...scenarioFields });
+export type ScenarioCreate = z.infer<typeof scenarioCreate>;
+export type ScenarioPatch = z.infer<typeof scenarioPatch>;
+export type ScenarioDto = z.infer<typeof scenarioDto>;
+
+/** YYYY-MM */
+export const yearMonth = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, { message: "Expected a month as YYYY-MM" });
+
+/** A one-off payment the savings must still cover (e.g. a yearly fee). */
+export const savingsWithdrawal = z.strictObject({ name, amount: euros, date: isoDate, note: note.optional() });
+export type SavingsWithdrawal = z.infer<typeof savingsWithdrawal>;
+
+/**
+ * The savings account: its balance on `date`, the planned withdrawals, and the last month (`until`, inclusive)
+ * it has to last. What's left after the withdrawals is spread over the months until then.
+ */
+export const savingsSchema = z.strictObject({
+  balance: euros,
+  date: isoDate,
+  until: yearMonth,
+  withdrawals: z.array(savingsWithdrawal).max(100),
+});
+export type Savings = z.infer<typeof savingsSchema>;
 
 /**
  * How much a transfer moves:

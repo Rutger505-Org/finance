@@ -28,6 +28,7 @@ const links = [
   { href: "/inkomsten", label: "Inkomsten" },
   { href: "/vaste-lasten", label: "Vaste lasten" },
   { href: "/uitgaven", label: "Uitgaven", prefix: true },
+  { href: "/spaargeld", label: "Spaargeld" },
 ];
 
 export default function RootLayout({

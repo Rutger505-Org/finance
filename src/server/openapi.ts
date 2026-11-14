@@ -18,6 +18,10 @@ import {
   outingCreate,
   outingDto,
   outingPatch,
+  savingsSchema,
+  scenarioCreate,
+  scenarioDto,
+  scenarioPatch,
   settingsSchema,
   spendingCreate,
   spendingDto,
@@ -127,6 +131,43 @@ export function openApiDocument() {
         get: { tags: ["Settings"], summary: "Transfer settings", responses: { "200": ok("Settings") } },
         put: { tags: ["Settings"], summary: "Replace the transfer settings", requestBody: body("Settings"), responses: { "200": ok("Settings"), ...errors } },
       },
+      "/api/v1/scenarios": {
+        get: {
+          tags: ["Scenario"],
+          summary:
+            "Situations to compare, real one first. Exactly one is real: the overview and transfers use it. Incomes and expenses list their scenarioIds (null = all).",
+          responses: { "200": list("Scenario") },
+        },
+        post: { tags: ["Scenario"], summary: "Create a scenario", requestBody: body("ScenarioCreate"), responses: { "201": ok("Scenario", "Created"), ...errors } },
+      },
+      "/api/v1/scenarios/{id}": {
+        parameters: idParam,
+        patch: {
+          tags: ["Scenario"],
+          summary: "Rename, or make it the real scenario (real: true)",
+          requestBody: body("ScenarioPatch"),
+          responses: { "200": ok("Scenario"), ...errors },
+        },
+        delete: {
+          tags: ["Scenario"],
+          summary: "Delete a scenario (not the real one). Items only in it are deleted, others lose it.",
+          responses: { "204": { description: "Deleted" }, "409": ok("Error", "Real scenario or linked income"), ...errors },
+        },
+      },
+      "/api/v1/savings": {
+        get: {
+          tags: ["Savings"],
+          summary:
+            "Savings plan + summary: what's left after the planned withdrawals, per month from next month through `until`. Both null when not set.",
+          responses: { "200": { description: "OK" } },
+        },
+        put: {
+          tags: ["Savings"],
+          summary: "Replace the savings plan",
+          requestBody: body("Savings"),
+          responses: { "200": { description: "OK" }, ...errors },
+        },
+      },
       ...crud("Income", "incomes", "Income"),
       ...crud("Expense", "expenses", "Expense"),
       ...spendingPaths(),
@@ -197,6 +238,10 @@ export function openApiDocument() {
         ExpenseCreate: schema(expenseCreate),
         ExpensePatch: schema(expensePatch),
         Settings: schema(settingsSchema),
+        Scenario: schema(scenarioDto),
+        ScenarioCreate: schema(scenarioCreate),
+        ScenarioPatch: schema(scenarioPatch),
+        Savings: schema(savingsSchema),
         Spending: schema(spendingDto),
         SpendingCreate: schema(spendingCreate),
         SpendingPatch: schema(spendingPatch),

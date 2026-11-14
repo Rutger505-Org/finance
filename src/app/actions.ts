@@ -12,6 +12,9 @@ import {
   incomePatch,
   outingCreate,
   outingPatch,
+  savingsSchema,
+  scenarioCreate,
+  scenarioPatch,
   settingsSchema,
   spendingCreate,
   spendingPatch,
@@ -20,6 +23,8 @@ import {
 import { repository, today } from "@/server/finance";
 import { HttpError } from "@/server/http-error";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
+import { SCENARIO_COOKIE } from "@/server/scenario";
 import { ZodError } from "zod";
 
 export type ActionResult =
@@ -126,4 +131,31 @@ export async function saveCategory(id: number | null, input: unknown) {
 
 export async function deleteCategory(id: number) {
   return run(() => repository.deleteCategory(id));
+}
+
+/** The scenario shown on Inkomsten and Vaste lasten; remembered in a cookie. */
+export async function selectScenario(id: number) {
+  (await cookies()).set(SCENARIO_COOKIE, String(id), { path: "/", maxAge: 60 * 60 * 24 * 365, sameSite: "lax" });
+  revalidatePath("/", "layout");
+}
+
+/** Returns the scenario's id, so the switch can select one it just created. */
+export async function saveScenario(id: number | null, input: unknown): Promise<ActionResult & { id?: number }> {
+  let saved: number | undefined;
+  const result = run(() => {
+    saved = (
+      id === null
+        ? repository.createScenario(scenarioCreate.parse(input))
+        : repository.updateScenario(id, scenarioPatch.parse(input))
+    ).id;
+  });
+  return result.ok ? { ...result, id: saved } : result;
+}
+
+export async function deleteScenario(id: number) {
+  return run(() => repository.deleteScenario(id));
+}
+
+export async function saveSavings(input: unknown) {
+  return run(() => repository.putSavings(savingsSchema.parse(input)), "Opgeslagen");
 }

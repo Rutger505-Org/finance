@@ -38,8 +38,53 @@ describe("repository", () => {
       cycle: monthly(5),
       account: "fixed",
       active: true,
+      scenarioIds: null,
       note: null,
     });
+  });
+
+  test("scenarios: the overview only uses items of the real one", () => {
+    const [real] = repository.listScenarios();
+    expect(real).toMatchObject({ name: "Huidig", real: true });
+    const other = repository.createScenario({ name: "Ander huis" });
+    repository.createIncome({ name: "Salaris", amount: 500, cycle: monthly(25), main: true });
+    repository.createExpense({ name: "Sport", amount: 30, cycle: monthly(1), account: "current" });
+    repository.createExpense({ name: "Hier", amount: 50, cycle: monthly(1), account: "current", scenarioIds: [real.id] });
+    repository.createExpense({ name: "Daar", amount: 400, cycle: monthly(1), account: "current", scenarioIds: [other.id] });
+    expect(repository.overview(today).expenses.map((line) => line.name).sort()).toEqual(["Hier", "Sport"]);
+
+    repository.updateScenario(other.id, { real: true });
+    expect(repository.realScenarioId()).toBe(other.id);
+    expect(repository.overview(today).expenses.map((line) => line.name).sort()).toEqual(["Daar", "Sport"]);
+    expect(() => repository.updateScenario(other.id, { real: false })).toThrow(HttpError);
+    expect(() => repository.deleteScenario(other.id)).toThrow(HttpError);
+  });
+
+  test("deleting a scenario deletes its own items, others lose it", () => {
+    const [real] = repository.listScenarios();
+    const other = repository.createScenario({ name: "Ander huis" });
+    const only = repository.createExpense({ name: "Daar", amount: 400, cycle: monthly(1), account: "current", scenarioIds: [other.id] });
+    const both = repository.createExpense({
+      name: "Beide",
+      amount: 10,
+      cycle: monthly(1),
+      account: "current",
+      scenarioIds: [real.id, other.id],
+    });
+    expect(() => repository.createExpense({ name: "X", amount: 1, cycle: monthly(1), account: "current", scenarioIds: [99] })).toThrow(
+      HttpError,
+    );
+    repository.deleteScenario(other.id);
+    expect(() => repository.getExpense(only.id)).toThrow(HttpError);
+    expect(repository.getExpense(both.id).scenarioIds).toEqual([real.id]);
+    expect(repository.listScenarios()).toHaveLength(1);
+  });
+
+  test("savings plan round trip", () => {
+    expect(repository.getSavings()).toBeNull();
+    const plan = { balance: 1000, date: "2026-10-01", until: "2027-06", withdrawals: [{ name: "Fee", amount: 200, date: "2027-01-01" }] };
+    expect(repository.putSavings(plan)).toEqual(plan);
+    expect(repository.getSavings()).toEqual(plan);
   });
 
   test("missing records give 404", () => {

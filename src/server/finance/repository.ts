@@ -24,6 +24,10 @@ import {
   type OutingCreate,
   type OutingDto,
   type OutingPatch,
+  type Savings,
+  type ScenarioCreate,
+  type ScenarioDto,
+  type ScenarioPatch,
   type Settings,
   type SpendingCreate,
   type SpendingDto,
@@ -31,12 +35,26 @@ import {
   type SpendingPatch,
 } from "@/lib/finance/schemas";
 import { parseDay } from "@/lib/finance/dates";
+import { inScenario } from "@/lib/finance/savings";
 import { HttpError } from "@/server/http-error";
 import * as schema from "@/server/db/schema";
 import { and, asc, desc, eq, gte, inArray, lte, ne, notInArray, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 
-const { balance, bookedLine, category, counterparty, counterpartyAlias, expense, income, outing, settings, spending } = schema;
+const {
+  balance,
+  bookedLine,
+  category,
+  counterparty,
+  counterpartyAlias,
+  expense,
+  income,
+  outing,
+  savings,
+  scenario,
+  settings,
+  spending,
+} = schema;
 
 type Db = BunSQLiteDatabase<typeof schema>;
 type IncomeRow = typeof income.$inferSelect;
@@ -57,6 +75,7 @@ function incomeDto(row: IncomeRow): IncomeDto {
     cycle: row.cycle,
     main: row.main,
     active: row.active,
+    scenarioIds: row.scenarioIds,
     note: row.note,
   };
 }
@@ -69,6 +88,7 @@ function expenseDto(row: ExpenseRow): ExpenseDto {
     cycle: row.cycle,
     account: row.account,
     active: row.active,
+    scenarioIds: row.scenarioIds,
     note: row.note,
   };
 }
@@ -178,11 +198,40 @@ export function createRepository(db: Db) {
     });
   }
 
-  /** Active incomes and expenses in cents. */
+  function realScenarioId(): number {
+    const row = db.select({ id: scenario.id }).from(scenario).where(eq(scenario.real, true)).get();
+    if (!row) throw new Error("No real scenario; the migration creates one");
+    return row.id;
+  }
+
+  function listScenarios(): ScenarioDto[] {
+    return db
+      .select({ id: scenario.id, name: scenario.name, real: scenario.real })
+      .from(scenario)
+      .orderBy(desc(scenario.real), sql`${scenario.name} collate nocase`)
+      .all();
+  }
+
+  /** Scenario ids must exist (foreign keys can't check a JSON list). */
+  function assertScenarios(ids: number[] | null | undefined, path = "scenarioIds") {
+    if (!ids) return;
+    const known = new Set(listScenarios().map((row) => row.id));
+    const missing = ids.filter((value) => !known.has(value));
+    if (missing.length) throw new HttpError(400, `${path}: scenario ${missing.join(", ")} does not exist`);
+  }
+
+  /** Active incomes and expenses of the real scenario, in cents. */
   function planInput(): PlanInput {
+    const real = realScenarioId();
     return {
-      incomes: db.select().from(income).where(eq(income.active, true)).orderBy(asc(income.id)).all(),
-      expenses: db.select().from(expense).where(eq(expense.active, true)).orderBy(asc(expense.id)).all(),
+      incomes: inScenario(
+        db.select().from(income).where(eq(income.active, true)).orderBy(asc(income.id)).all(),
+        real,
+      ),
+      expenses: inScenario(
+        db.select().from(expense).where(eq(expense.active, true)).orderBy(asc(expense.id)).all(),
+        real,
+      ),
       transfers: getSettings().transfers.map((transfer) => ({
         ...transfer,
         amount: typeof transfer.amount === "number" ? toCents(transfer.amount) : transfer.amount,
@@ -493,6 +542,7 @@ export function createRepository(db: Db) {
     },
     getIncome,
     createIncome(input: IncomeCreate): IncomeDto {
+      assertScenarios(input.scenarioIds);
       return db.transaction((tx) => {
         const row = tx
           .insert(income)
@@ -504,6 +554,7 @@ export function createRepository(db: Db) {
       });
     },
     updateIncome(id: number, patch: IncomePatch): IncomeDto {
+      assertScenarios(patch.scenarioIds);
       return db.transaction((tx) => {
         const row = tx.update(income).set(incomeValues(patch)).where(eq(income.id, id)).returning().get();
         if (!row) notFound("Income", id);
@@ -524,6 +575,7 @@ export function createRepository(db: Db) {
     },
     getExpense,
     createExpense(input: ExpenseCreate): ExpenseDto {
+      assertScenarios(input.scenarioIds);
       const row = db
         .insert(expense)
         .values({
@@ -538,12 +590,81 @@ export function createRepository(db: Db) {
       return expenseDto(row);
     },
     updateExpense(id: number, patch: ExpensePatch): ExpenseDto {
+      assertScenarios(patch.scenarioIds);
       const row = db.update(expense).set(expenseValues(patch)).where(eq(expense.id, id)).returning().get();
       return row ? expenseDto(row) : notFound("Expense", id);
     },
     deleteExpense(id: number): void {
       const row = db.delete(expense).where(eq(expense.id, id)).returning().get();
       if (!row) notFound("Expense", id);
+    },
+
+    listScenarios,
+    realScenarioId,
+    createScenario(input: ScenarioCreate): ScenarioDto {
+      try {
+        return db.transaction((tx) => {
+          if (input.real) tx.update(scenario).set({ real: false }).run();
+          return tx
+            .insert(scenario)
+            .values({ name: input.name, real: input.real ?? false })
+            .returning({ id: scenario.id, name: scenario.name, real: scenario.real })
+            .get();
+        });
+      } catch (error) {
+        conflict(error, `Scenario "${input.name}" already exists`);
+      }
+    },
+    updateScenario(id: number, patch: ScenarioPatch): ScenarioDto {
+      const current = listScenarios().find((row) => row.id === id) ?? notFound("Scenario", id);
+      if (patch.real === false && current.real) {
+        throw new HttpError(400, "real: make another scenario real instead");
+      }
+      try {
+        return db.transaction((tx) => {
+          if (patch.real && !current.real) tx.update(scenario).set({ real: false }).run();
+          const row = tx
+            .update(scenario)
+            .set(patch)
+            .where(eq(scenario.id, id))
+            .returning({ id: scenario.id, name: scenario.name, real: scenario.real })
+            .get();
+          return row ?? notFound("Scenario", id);
+        });
+      } catch (error) {
+        conflict(error, `Scenario "${patch.name}" already exists`);
+      }
+    },
+    /** Not the real one. Items only in this scenario go with it; others just lose it. */
+    deleteScenario(id: number): void {
+      const current = listScenarios().find((row) => row.id === id) ?? notFound("Scenario", id);
+      if (current.real) throw new HttpError(409, "The real scenario can't be deleted; make another one real first");
+      const linked = new Set(linkedIncomeIds(getSettings()));
+      db.transaction((tx) => {
+        for (const table of [income, expense] as const) {
+          for (const row of tx.select({ id: table.id, name: table.name, scenarioIds: table.scenarioIds }).from(table).all()) {
+            if (!row.scenarioIds?.includes(id)) continue;
+            const rest = row.scenarioIds.filter((value) => value !== id);
+            if (rest.length === 0 && table === income && linked.has(row.id)) {
+              throw new HttpError(409, `Income ${row.name} is linked to a transfer; change that transfer first`);
+            }
+            if (rest.length === 0) tx.delete(table).where(eq(table.id, row.id)).run();
+            else tx.update(table).set({ scenarioIds: rest }).where(eq(table.id, row.id)).run();
+          }
+        }
+        tx.delete(scenario).where(eq(scenario.id, id)).run();
+      });
+    },
+
+    getSavings(): Savings | null {
+      return db.select().from(savings).where(eq(savings.id, 1)).get()?.plan ?? null;
+    },
+    putSavings(value: Savings): Savings {
+      db.insert(savings)
+        .values({ id: 1, plan: value })
+        .onConflictDoUpdate({ target: savings.id, set: { plan: value } })
+        .run();
+      return value;
     },
 
     getSettings,
@@ -592,11 +713,13 @@ export function createRepository(db: Db) {
         const knownIncomes = new Set(tx.select({ id: income.id }).from(income).all().map((r) => r.id));
         const knownExpenses = new Set(tx.select({ id: expense.id }).from(expense).all().map((r) => r.id));
         config.incomes.forEach((item, index) => {
+          assertScenarios(item.scenarioIds, `incomes[${index}].scenarioIds`);
           if (item.id !== undefined && !knownIncomes.has(item.id)) {
             throw new HttpError(400, `incomes[${index}].id: income ${item.id} does not exist`);
           }
         });
         config.expenses.forEach((item, index) => {
+          assertScenarios(item.scenarioIds, `expenses[${index}].scenarioIds`);
           if (item.id !== undefined && !knownExpenses.has(item.id)) {
             throw new HttpError(400, `expenses[${index}].id: expense ${item.id} does not exist`);
           }
@@ -614,6 +737,7 @@ export function createRepository(db: Db) {
             cycle: item.cycle,
             main: item.main ?? false,
             active: item.active ?? true,
+            scenarioIds: item.scenarioIds ?? null,
             note: item.note ?? null,
           };
           if (id === undefined) tx.insert(income).values(values).run();
@@ -626,6 +750,7 @@ export function createRepository(db: Db) {
             cycle: item.cycle,
             account: item.account,
             active: item.active ?? true,
+            scenarioIds: item.scenarioIds ?? null,
             note: item.note ?? null,
           };
           if (id === undefined) tx.insert(expense).values(values).run();
