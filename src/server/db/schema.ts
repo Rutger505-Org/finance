@@ -1,4 +1,4 @@
-import type { Account, CounterpartyHandling, Cycle, Savings, Settings } from "@/lib/finance/schemas";
+import type { Account, BalanceAccount, CounterpartyHandling, Cycle, SavingsWithdrawal, Settings } from "@/lib/finance/schemas";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /** Amounts are cents. Cycles are JSON, validated by `cycleSchema` on the way in. */
@@ -51,13 +51,32 @@ export const expense = sqliteTable("expense", {
   ...timestamps,
 });
 
+/** A savings account. Its balance is its latest checkpoint in `balance`. */
+export const savingsAccount = sqliteTable("savings_account", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  /** YYYY-MM, last month it has to last; what's free is spread until then. Null: not spread (a buffer). */
+  until: text("until"),
+  /** Planned payments from it, amounts in euros as in `savingsWithdrawal`. */
+  withdrawals: text("withdrawals", { mode: "json" }).$type<SavingsWithdrawal[]>().notNull(),
+  /** Scenarios whose monthly budget its spread counts in; null for all. */
+  scenarioIds: scenarioIds(),
+  note: text("note"),
+  ...timestamps,
+});
+
+/** A checkpoint: the real balance of an account at the end of `date`, or at `time` that day. */
 export const balance = sqliteTable(
   "balance",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    account: text("account").$type<Account>().notNull(),
+    account: text("account").$type<BalanceAccount>().notNull(),
+    /** Set iff account is "savings". */
+    savingsAccountId: integer("savings_account_id").references(() => savingsAccount.id, { onDelete: "cascade" }),
     /** YYYY-MM-DD */
     date: text("date").notNull(),
+    /** HH:MM; spendings with a later time that day come after it. Null: end of the day. */
+    time: text("time"),
     amount: integer("amount").notNull(),
     createdAt: timestamps.createdAt,
   },
@@ -69,13 +88,6 @@ export const settings = sqliteTable("settings", {
   id: integer("id").primaryKey(),
   /** Amounts in euros, as in `settingsSchema`. */
   transfers: text("transfers", { mode: "json" }).$type<Settings["transfers"]>().notNull(),
-  updatedAt: timestamps.updatedAt,
-});
-
-/** A single row (id 1): the savings account and what it still has to pay. Amounts in euros, as in `savingsSchema`. */
-export const savings = sqliteTable("savings", {
-  id: integer("id").primaryKey(),
-  plan: text("plan", { mode: "json" }).$type<Savings>().notNull(),
   updatedAt: timestamps.updatedAt,
 });
 

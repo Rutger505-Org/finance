@@ -141,16 +141,37 @@ export const savingsWithdrawal = z.strictObject({ name, amount: euros, date: iso
 export type SavingsWithdrawal = z.infer<typeof savingsWithdrawal>;
 
 /**
- * The savings account: its balance on `date`, the planned withdrawals, and the last month (`until`, inclusive)
- * it has to last. What's left after the withdrawals is spread over the months until then.
+ * A savings account. What's free after the planned withdrawals is spread over the months through `until`
+ * (inclusive); without `until` it isn't (a buffer). Its balance is its latest checkpoint.
  */
-export const savingsSchema = z.strictObject({
-  balance: euros,
-  date: isoDate,
-  until: yearMonth,
+const savingsAccountFields = {
+  name,
+  until: yearMonth.nullable(),
   withdrawals: z.array(savingsWithdrawal).max(100),
+  /** Scenarios whose monthly budget the spread counts in; null for all. */
+  scenarioIds: scenarioIdsSchema,
+  note,
+};
+export const savingsAccountCreate = z.strictObject({
+  ...savingsAccountFields,
+  until: savingsAccountFields.until.optional(),
+  withdrawals: savingsAccountFields.withdrawals.optional(),
+  scenarioIds: scenarioIdsSchema.optional(),
+  note: note.optional(),
+  /** First checkpoint. */
+  balance: z.strictObject({ amount: signedEuros, date: isoDate }).optional(),
 });
-export type Savings = z.infer<typeof savingsSchema>;
+export const savingsAccountPatch = z.strictObject(savingsAccountFields).partial();
+export type SavingsAccountCreate = z.infer<typeof savingsAccountCreate>;
+export type SavingsAccountPatch = z.infer<typeof savingsAccountPatch>;
+
+/** What the summary of a savings account needs: its balance on `date`, the withdrawals and `until`. */
+export interface Savings {
+  balance: number;
+  date: string;
+  until: string;
+  withdrawals: SavingsWithdrawal[];
+}
 
 /**
  * How much a transfer moves:
@@ -182,20 +203,44 @@ export function linkedIncomeIds(settings: Settings): number[] {
   );
 }
 
-export const balanceCreate = z.strictObject({
-  account: accountSchema,
-  amount: signedEuros,
-  /** Defaults to today. */
-  date: isoDate.optional(),
-});
+/** Accounts with checkpoints: the two of `accountSchema` and the savings accounts. */
+export const balanceAccountSchema = z.enum(["current", "fixed", "savings"]);
+export type BalanceAccount = z.infer<typeof balanceAccountSchema>;
+
+/** A checkpoint: the real balance at the end of `date`, or at `time` that day. */
+export const balanceCreate = z
+  .strictObject({
+    account: balanceAccountSchema,
+    /** Required for, and only for, account "savings". */
+    savingsAccountId: id.optional(),
+    amount: signedEuros,
+    /** Defaults to today. */
+    date: isoDate.optional(),
+    /** HH:MM; spendings later that day come after it. Default: end of the day. */
+    time: clockTime.optional(),
+  })
+  .refine((value) => (value.account === "savings") === (value.savingsAccountId !== undefined), {
+    message: "savingsAccountId is required for, and only for, account savings",
+    path: ["savingsAccountId"],
+  });
 export const balanceDto = z.strictObject({
   id,
-  account: accountSchema,
+  account: balanceAccountSchema,
+  savingsAccountId: id.nullable(),
   amount: signedEuros,
   date: isoDate,
+  time: clockTime.nullable(),
 });
 export type BalanceCreate = z.infer<typeof balanceCreate>;
 export type BalanceDto = z.infer<typeof balanceDto>;
+
+export const savingsAccountDto = z.strictObject({
+  id,
+  ...savingsAccountFields,
+  /** Latest checkpoint, null without one. */
+  balance: z.strictObject({ amount: signedEuros, date: isoDate, time: clockTime.nullable() }).nullable(),
+});
+export type SavingsAccountDto = z.infer<typeof savingsAccountDto>;
 
 const optionalId = id.nullable();
 

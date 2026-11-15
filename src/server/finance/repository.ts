@@ -1,9 +1,11 @@
 import { isoDay, type Day } from "@/lib/finance/dates";
+import { planChanges, reconcile, type Change, type Reconciliation } from "@/lib/finance/balances";
 import { buildOverview, resolveTransfers, type Overview, type PlanInput, type TransferLine } from "@/lib/finance/plan";
 import {
   defaultSettings,
   linkedIncomeIds,
   type Account,
+  type BalanceAccount,
   type BalanceCreate,
   type BookedLineDto,
   type BookedLineFilter,
@@ -24,7 +26,9 @@ import {
   type OutingCreate,
   type OutingDto,
   type OutingPatch,
-  type Savings,
+  type SavingsAccountCreate,
+  type SavingsAccountDto,
+  type SavingsAccountPatch,
   type ScenarioCreate,
   type ScenarioDto,
   type ScenarioPatch,
@@ -50,7 +54,7 @@ const {
   expense,
   income,
   outing,
-  savings,
+  savingsAccount,
   scenario,
   settings,
   spending,
@@ -94,7 +98,28 @@ function expenseDto(row: ExpenseRow): ExpenseDto {
 }
 
 function balanceDto(row: BalanceRow): BalanceDto {
-  return { id: row.id, account: row.account, amount: toEuros(row.amount), date: row.date };
+  return {
+    id: row.id,
+    account: row.account,
+    savingsAccountId: row.savingsAccountId,
+    amount: toEuros(row.amount),
+    date: row.date,
+    time: row.time,
+  };
+}
+
+type SavingsAccountRow = typeof savingsAccount.$inferSelect;
+
+function savingsAccountDto(row: SavingsAccountRow, latest: BalanceRow | undefined): SavingsAccountDto {
+  return {
+    id: row.id,
+    name: row.name,
+    until: row.until,
+    withdrawals: row.withdrawals,
+    scenarioIds: row.scenarioIds,
+    note: row.note,
+    balance: latest ? { amount: toEuros(latest.amount), date: latest.date, time: latest.time } : null,
+  };
 }
 
 function outingDto(row: OutingRow): OutingDto {
@@ -247,6 +272,30 @@ export function createRepository(db: Db) {
       .orderBy(desc(balance.date), desc(balance.id))
       .limit(1)
       .get();
+  }
+
+  function latestCheckpoint(account: BalanceAccount, savingsAccountId?: number) {
+    return db
+      .select()
+      .from(balance)
+      .where(
+        and(
+          eq(balance.account, account),
+          savingsAccountId === undefined ? undefined : eq(balance.savingsAccountId, savingsAccountId),
+        ),
+      )
+      .orderBy(desc(balance.date), sql`${balance.time} is null`, desc(balance.time), desc(balance.id))
+      .limit(1)
+      .get();
+  }
+
+  function getSavingsAccount(id: number): SavingsAccountDto {
+    const row = db.select().from(savingsAccount).where(eq(savingsAccount.id, id)).get();
+    return row ? savingsAccountDto(row, latestCheckpoint("savings", id)) : notFound("Savings account", id);
+  }
+
+  function assertNotFuture(date: string, today: Day) {
+    if (date > isoDay(today)) throw new HttpError(400, "date: a checkpoint can't be in the future");
   }
 
   /** Foreign keys aren't enforced (bun:sqlite has them off), so check references here. */
@@ -656,15 +705,60 @@ export function createRepository(db: Db) {
       });
     },
 
-    getSavings(): Savings | null {
-      return db.select().from(savings).where(eq(savings.id, 1)).get()?.plan ?? null;
+    listSavingsAccounts(): SavingsAccountDto[] {
+      return db
+        .select()
+        .from(savingsAccount)
+        .orderBy(sql`${savingsAccount.name} collate nocase`)
+        .all()
+        .map((row) => savingsAccountDto(row, latestCheckpoint("savings", row.id)));
     },
-    putSavings(value: Savings): Savings {
-      db.insert(savings)
-        .values({ id: 1, plan: value })
-        .onConflictDoUpdate({ target: savings.id, set: { plan: value } })
-        .run();
-      return value;
+    getSavingsAccount,
+    /** With `balance`, its first checkpoint is saved too. */
+    createSavingsAccount(input: SavingsAccountCreate, today: Day): SavingsAccountDto {
+      assertScenarios(input.scenarioIds);
+      if (input.balance) assertNotFuture(input.balance.date, today);
+      const id = db.transaction((tx) => {
+        const row = tx
+          .insert(savingsAccount)
+          .values({
+            name: input.name,
+            until: input.until ?? null,
+            withdrawals: input.withdrawals ?? [],
+            scenarioIds: input.scenarioIds ?? null,
+            note: input.note ?? null,
+          })
+          .returning()
+          .get();
+        if (input.balance) {
+          tx.insert(balance)
+            .values({
+              account: "savings",
+              savingsAccountId: row.id,
+              date: input.balance.date,
+              amount: toCents(input.balance.amount),
+            })
+            .run();
+        }
+        return row.id;
+      });
+      return getSavingsAccount(id);
+    },
+    updateSavingsAccount(id: number, patch: SavingsAccountPatch): SavingsAccountDto {
+      assertScenarios(patch.scenarioIds);
+      const row = Object.keys(patch).length
+        ? db.update(savingsAccount).set(patch).where(eq(savingsAccount.id, id)).returning().get()
+        : db.select().from(savingsAccount).where(eq(savingsAccount.id, id)).get();
+      if (!row) notFound("Savings account", id);
+      return getSavingsAccount(id);
+    },
+    /** Its checkpoints go with it. */
+    deleteSavingsAccount(id: number): void {
+      db.transaction((tx) => {
+        tx.delete(balance).where(eq(balance.savingsAccountId, id)).run();
+        const row = tx.delete(savingsAccount).where(eq(savingsAccount.id, id)).returning().get();
+        if (!row) notFound("Savings account", id);
+      });
     },
 
     getSettings,
@@ -677,20 +771,35 @@ export function createRepository(db: Db) {
       return getSettings();
     },
 
-    listBalances(filter: { account?: Account; limit?: number } = {}): BalanceDto[] {
+    listBalances(filter: { account?: BalanceAccount; savingsAccountId?: number; limit?: number } = {}): BalanceDto[] {
       return db
         .select()
         .from(balance)
-        .where(filter.account ? eq(balance.account, filter.account) : undefined)
-        .orderBy(desc(balance.date), desc(balance.id))
+        .where(
+          and(
+            filter.account ? eq(balance.account, filter.account) : undefined,
+            filter.savingsAccountId ? eq(balance.savingsAccountId, filter.savingsAccountId) : undefined,
+          ),
+        )
+        .orderBy(desc(balance.date), sql`${balance.time} is null`, desc(balance.time), desc(balance.id))
         .limit(filter.limit ?? 100)
         .all()
         .map(balanceDto);
     },
+    /** Not in the future: a checkpoint is a balance seen on the bank. */
     createBalance(input: BalanceCreate, today: Day): BalanceDto {
+      const date = input.date ?? isoDay(today);
+      assertNotFuture(date, today);
+      if (input.savingsAccountId !== undefined) getSavingsAccount(input.savingsAccountId);
       const row = db
         .insert(balance)
-        .values({ account: input.account, amount: toCents(input.amount), date: input.date ?? isoDay(today) })
+        .values({
+          account: input.account,
+          savingsAccountId: input.savingsAccountId ?? null,
+          amount: toCents(input.amount),
+          date,
+          time: input.time ?? null,
+        })
         .returning()
         .get();
       return balanceDto(row);
@@ -698,6 +807,46 @@ export function createRepository(db: Db) {
     deleteBalance(id: number): void {
       const row = db.delete(balance).where(eq(balance.id, id)).returning().get();
       if (!row) notFound("Balance", id);
+    },
+    /**
+     * An account's checkpoints, each compared with what it should have been, and its expected balance per day
+     * from `from` through `until`: the real scenario's incomes, expenses and transfers, the spendings (current
+     * account) and the planned withdrawals (savings).
+     */
+    reconcile(account: BalanceAccount, savingsAccountId: number | null, from: Day, until: Day): Reconciliation {
+      const rows = db
+        .select()
+        .from(balance)
+        .where(
+          and(
+            eq(balance.account, account),
+            savingsAccountId === null ? undefined : eq(balance.savingsAccountId, savingsAccountId),
+          ),
+        )
+        .all();
+      const checkpoints = rows.map((row) => ({ id: row.id, day: parseDay(row.date), time: row.time, amount: row.amount }));
+      const first = Math.min(from, ...checkpoints.map((checkpoint) => checkpoint.day));
+      const after = first - 1;
+      let changes: Change[];
+      if (account === "savings") {
+        const withdrawals = savingsAccountId === null ? [] : getSavingsAccount(savingsAccountId).withdrawals;
+        changes = withdrawals
+          .map((w): Change => ({ day: parseDay(w.date), time: null, name: w.name, amount: -toCents(w.amount), kind: "withdrawal" }))
+          .filter((change) => change.day > after && change.day <= until);
+      } else {
+        changes = planChanges(planInput(), account, after, until);
+        if (account === "current") {
+          const rows = db
+            .select()
+            .from(spending)
+            .where(and(gte(spending.date, isoDay(after + 1)), lte(spending.date, isoDay(until))))
+            .all();
+          for (const row of rows) {
+            changes.push({ day: parseDay(row.date), time: row.time, name: row.description, amount: -row.amount, kind: "spending" });
+          }
+        }
+      }
+      return reconcile(checkpoints, changes, from, until);
     },
 
     getConfig(): Config {

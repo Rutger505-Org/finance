@@ -1,5 +1,5 @@
 import { toYMD, type Day } from "./dates";
-import type { Savings, SavingsWithdrawal } from "./schemas";
+import type { Savings, SavingsAccountDto, SavingsWithdrawal } from "./schemas";
 
 export interface SavingsSummary {
   /** Withdrawals after the balance date, through the end of `until`, by date. */
@@ -45,4 +45,19 @@ export function summarizeSavings(savings: Savings, today: Day): SavingsSummary {
 /** Items in a scenario: those without scenarios belong to all of them. */
 export function inScenario<T extends { scenarioIds: number[] | null }>(items: T[], scenarioId: number): T[] {
   return items.filter((item) => item.scenarioIds === null || item.scenarioIds.includes(scenarioId));
+}
+
+/** The summary of a savings account that is spread (has `until`) and has a balance; null otherwise. */
+export function summarizeAccount(account: SavingsAccountDto, today: Day): SavingsSummary | null {
+  if (!account.until || !account.balance) return null;
+  return summarizeSavings(
+    { balance: account.balance.amount, date: account.balance.date, until: account.until, withdrawals: account.withdrawals },
+    today,
+  );
+}
+
+/** Euros per month the spread savings accounts of a scenario add, null when none is spread. */
+export function savingsPerMonth(accounts: SavingsAccountDto[], scenarioId: number, today: Day): number | null {
+  const amounts = inScenario(accounts, scenarioId).flatMap((account) => summarizeAccount(account, today)?.perMonth ?? []);
+  return amounts.length ? Math.round(amounts.reduce((total, amount) => total + amount, 0) * 100) / 100 : null;
 }

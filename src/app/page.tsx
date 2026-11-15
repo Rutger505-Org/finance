@@ -60,8 +60,8 @@ export default async function OverviewPage({
           {expenses.length === 0 ? (
             <p className="text-muted-foreground text-sm">
               Nog geen vaste lasten ingevoerd. Voeg ze toe bij{" "}
-              <Link href="/vaste-lasten" className="underline">
-                Vaste lasten
+              <Link href="/posten" className="underline">
+                Posten
               </Link>
               .
             </p>

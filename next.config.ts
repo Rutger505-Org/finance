@@ -4,7 +4,8 @@ const nextConfig: NextConfig = {
   output: "standalone",
   transpilePackages: ["@t3-oss/env-nextjs", "@t3-oss/env-core"],
   redirects: async () => [
-    { source: "/posten", destination: "/inkomsten", permanent: false },
+    { source: "/inkomsten", destination: "/posten", permanent: false },
+    { source: "/vaste-lasten", destination: "/posten", permanent: false },
     { source: "/uitjes", destination: "/uitgaven/uitjes", permanent: false },
     { source: "/tegenrekeningen", destination: "/uitgaven/tegenrekeningen", permanent: false },
   ],

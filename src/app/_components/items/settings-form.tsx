@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import type { Settings, Transfer } from "@/lib/finance/schemas";
 import { amountText, parseAmount } from "@/lib/format";
-import { useState, useTransition } from "react";
+import { useId, useState, useTransition } from "react";
 import { CycleFields, cycleState, cycleValue, type CycleState } from "./cycle-fields";
 
 interface TransferState {
@@ -44,6 +44,7 @@ export function SettingsForm({
   /** Current amount per saved transfer, same order as `settings.transfers`. */
   amounts: string[];
 }) {
+  const formId = useId();
   const [transfers, setTransfers] = useState(() => settings.transfers.map(transferState));
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();
@@ -80,7 +81,8 @@ export function SettingsForm({
   return (
     <form onSubmit={submit} className="space-y-4">
       {transfers.map((t, index) => {
-        const id = `transfer-${t.key}`;
+        // Not the key: the module counter differs between server and browser.
+        const id = `${formId}-transfer-${index}`;
         const savedIndex = savedKeys.indexOf(t.key);
         return (
           <fieldset key={t.key} className="space-y-3 rounded-md border p-3">

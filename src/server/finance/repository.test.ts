@@ -80,11 +80,46 @@ describe("repository", () => {
     expect(repository.listScenarios()).toHaveLength(1);
   });
 
-  test("savings plan round trip", () => {
-    expect(repository.getSavings()).toBeNull();
-    const plan = { balance: 1000, date: "2026-10-01", until: "2027-06", withdrawals: [{ name: "Fee", amount: 200, date: "2027-01-01" }] };
-    expect(repository.putSavings(plan)).toEqual(plan);
-    expect(repository.getSavings()).toEqual(plan);
+  test("savings accounts: first checkpoint, latest one is the balance, deleted with the account", () => {
+    const [real] = repository.listScenarios();
+    const account = repository.createSavingsAccount(
+      {
+        name: "Studie",
+        until: "2027-06",
+        withdrawals: [{ name: "Fee", amount: 200, date: "2027-01-01" }],
+        scenarioIds: [real.id],
+        balance: { amount: 1000, date: "2026-10-01" },
+      },
+      today,
+    );
+    expect(account).toMatchObject({ name: "Studie", until: "2027-06", balance: { amount: 1000, date: "2026-10-01", time: null } });
+    repository.createBalance({ account: "savings", savingsAccountId: account.id, amount: 900, date: "2026-10-20" }, today);
+    expect(repository.getSavingsAccount(account.id).balance?.amount).toBe(900);
+    expect(() =>
+      repository.createBalance({ account: "savings", savingsAccountId: 99, amount: 1 }, today),
+    ).toThrow(HttpError);
+    repository.deleteSavingsAccount(account.id);
+    expect(repository.listSavingsAccounts()).toEqual([]);
+    expect(repository.listBalances({ account: "savings" })).toEqual([]);
+  });
+
+  test("checkpoints can't be in the future", () => {
+    expect(() => repository.createBalance({ account: "current", amount: 1, date: "2026-10-26" }, today)).toThrow(HttpError);
+  });
+
+  test("reconcile the current account: plan, spendings and the checkpoint before", () => {
+    repository.createIncome({ name: "Salaris", amount: 500, cycle: monthly(20), main: true });
+    repository.createSpending({ date: "2026-10-21", time: "13:00", amount: 30, description: "Lunch" }, today);
+    repository.createSpending({ date: "2026-10-21", time: "20:00", amount: 10, description: "Drinken" }, today);
+    repository.createBalance({ account: "current", amount: 100, date: "2026-10-19" }, today);
+    repository.createBalance({ account: "current", amount: 560, date: "2026-10-21", time: "18:00" }, today);
+    const result = repository.reconcile("current", null, parseDay("2026-10-18"), today);
+    expect(result.checkpoints.map((c) => [c.amount, c.expected])).toEqual([
+      [10000, null],
+      [56000, 57000],
+    ]);
+    expect(result.expected).toBe(55000);
+    expect(result.days[0]?.balance).toBeNull();
   });
 
   test("missing records give 404", () => {
@@ -129,7 +164,7 @@ describe("repository", () => {
     repository.createExpense({ name: "Telefoon", amount: 20, cycle: monthly(16), account: "fixed" });
     repository.createExpense({ name: "Oud", amount: 99, cycle: monthly(16), account: "fixed", active: false });
     repository.createBalance({ account: "current", amount: 100, date: "2026-10-25" }, today);
-    repository.createBalance({ account: "current", amount: 999, date: "2026-10-30" }, today);
+    repository.createBalance({ account: "current", amount: 999, date: "2026-10-30" }, parseDay("2026-10-30"));
     const o = repository.overview(today);
     expect(o.expenses.map((line) => line.name)).toEqual(["Telefoon"]);
     expect(o.current?.balance).toBe(10000);

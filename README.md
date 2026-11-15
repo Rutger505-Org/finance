@@ -8,7 +8,8 @@ Overview of fixed costs, the transfers to the fixed-costs account and what's fre
 - **Expense account:** `fixed` is a direct debit from the fixed-costs account. `current` is paid from the current account; the day before the due date the reserved money moves back to the current account.
 - **Transfers:** a list, each with its own cycle (e.g. the day after each income). Amount: euros (fixed), `{ "income": <id> }` (that whole income; it can't be deleted while linked, inactive gives 0) or `auto`. Fixed and income amounts count first; the auto transfers split the rest of the average need, rounded up to the cent per transfer. Anything above the need builds a buffer. Each transfer carries every expense in proportion to its share of all transferred money.
 - **Free to spend:** latest current-account balance + incomes until the next payment of the main income − transfers in that period. Refunds don't count, that money is already spent on its expense.
-- **Balances:** the overview uses the latest balance per account up to that day. The fixed-costs balance is projected to today with the planned movements since then.
+- **Balances (checkpoints):** the real balance of an account (current, fixed-costs or a savings account) at the end of a day, or at a time that day (spendings later that day come after it). The expected balance is the checkpoint before plus what happened since: the real scenario's incomes, transfers, money moved back and expenses, the spendings (current account) and planned withdrawals (savings). Each checkpoint shows how far it is off; something missing or wrong in the app shows up there. The overview uses the latest balance per account up to that day.
+- **Savings accounts:** several, each with a balance (latest checkpoint), planned withdrawals and optionally a last month: what's free after the withdrawals is spread over the months until then and counts in the monthly budget of the account's scenarios.
 
 - **One-off spendings:** date, time (`HH:MM`, optional: payment time from the statement line), amount (negative = money back, e.g. a Tikkie), description. Category = what it was on (Drinken, Eten, ...; editable, seeded by the migration). Outing = what it was for (a party); spendings on other days, like a ticket bought months earlier, belong to it too.
 - **Counterparties:** what is known about who is behind a bank statement line: real name, IBANs and parts of the name on the line (aliases, each belongs to one counterparty), default category, handling (`spending`; `skip` for fixed costs, own accounts, income; `ask` when it depends on the line) and a note. A new spending to a counterparty without a category gets its default.
@@ -18,7 +19,7 @@ Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`m
 
 ## Using it
 
-- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Inkomsten and Vaste lasten (each with the transfers to the fixed-costs account), Uitgaven with subpages: per maand (`?maand=YYYY-MM`), Uitjes (outings with totals per category), Tegenrekeningen, Categorieën.
+- **UI:** Overzicht (any day via `?datum=YYYY-MM-DD`), Posten (incomes, fixed costs and the transfers to the fixed-costs account, per scenario), Saldo (checkpoints, expected balance per account, chart of the last two months), Spaargeld (savings accounts), Uitgaven with subpages: per maand (`?maand=YYYY-MM`), Uitjes (outings with totals per category), Tegenrekeningen, Categorieën.
 - **API:** `/api/v1`, spec at `/api/v1/openapi.json`. Amounts are euros (max 2 decimals), dates `YYYY-MM-DD`, times `HH:MM`.
   - `GET /overview?date=&days=`
   - `GET|PUT /config`: settings + incomes + expenses. Items with an `id` are updated, without one created, missing ones deleted. Balances are not touched.
@@ -27,7 +28,9 @@ Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`m
   - `GET|POST /spendings` (`?from=&to=&categoryId=&outingId=&counterpartyId=`), `GET|PATCH|DELETE /spendings/{id}`, same for `/outings` and `/counterparties` (`ibans`, `names` replace the saved aliases)
   - `POST /bookings` (`[{ lines: [{ key, date, amount }], spending: {...} }` or `skip: "reason"` instead of `spending`), all or nothing, 409 if a line is already booked; `GET /booked-lines?from=&to=`; `DELETE /booked-lines?key=` (un-skip)
   - `GET|POST /categories`, `PATCH|DELETE /categories/{id}`. Deleting a category, outing or counterparty keeps its spendings, unlinked.
-  - `GET|POST /balances` (`?account=fixed|current&limit=`), `DELETE /balances/{id}`
+  - `GET|POST /balances` (`?account=current|fixed|savings&savingsAccountId=&limit=`; POST `{ account, savingsAccountId?, amount, date?, time? }`, not in the future), `DELETE /balances/{id}`
+  - `GET /reconciliation?account=&savingsAccountId=&from=&to=`: expected balance, checkpoints with expected + difference, changes since the last one, balance per day
+  - `GET|POST /savings-accounts`, `GET|PATCH|DELETE /savings-accounts/{id}` (POST may include the first checkpoint as `balance: { amount, date }`)
 
 ```sh
 curl -s https://finance.homelab.rutgerpronk.com/api/v1/overview | jq
@@ -57,4 +60,4 @@ Work happens on `main`; every push deploys production through the shared workflo
 
 ## Checking automatic surplus transfers
 
-The user periodically exports bank-statement transactions for both the current and fixed-costs accounts. Compare those transactions with the configured incomes, expenses and automatic transfer amount in the config (`GET /api/v1/config`) to validate that surplus transfers are set up correctly. The balance-entry page is not part of this workflow; do not ask the user to manually enter balances. Treat statement exports as sensitive financial data and only use them for the requested check.
+The user periodically exports bank-statement transactions for both the current and fixed-costs accounts. Compare those transactions with the configured incomes, expenses and automatic transfer amount in the config (`GET /api/v1/config`) to validate that surplus transfers are set up correctly. The final balance of an export can be saved as a checkpoint (`POST /balances`) to see whether everything is booked. Treat statement exports as sensitive financial data and only use them for the requested check.

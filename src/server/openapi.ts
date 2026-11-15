@@ -18,7 +18,9 @@ import {
   outingCreate,
   outingDto,
   outingPatch,
-  savingsSchema,
+  savingsAccountCreate,
+  savingsAccountDto,
+  savingsAccountPatch,
   scenarioCreate,
   scenarioDto,
   scenarioPatch,
@@ -95,6 +97,22 @@ function spendingPaths() {
   return paths;
 }
 
+function savingsPaths() {
+  const paths = crud("Savings account", "savings-accounts", "SavingsAccount");
+  type Ops = Record<"get" | "post" | "delete", { summary: string }>;
+  const list = paths["/api/v1/savings-accounts"] as unknown as Ops;
+  const item = paths["/api/v1/savings-accounts/{id}"] as unknown as Ops;
+  Object.assign(list.get, {
+    summary:
+      "List savings accounts with their balance (latest checkpoint) and summary: what's free after the planned withdrawals, per month from next month through `until` (null when not spread or without balance). `scenarioIds`: the scenarios whose monthly budget the spread counts in.",
+  });
+  Object.assign(list.post, {
+    summary: "Create a savings account; `balance` saves its first checkpoint",
+  });
+  Object.assign(item.delete, { summary: "Delete a savings account and its checkpoints" });
+  return paths;
+}
+
 export function openApiDocument() {
   return {
     openapi: "3.1.0",
@@ -154,20 +172,7 @@ export function openApiDocument() {
           responses: { "204": { description: "Deleted" }, "409": ok("Error", "Real scenario or linked income"), ...errors },
         },
       },
-      "/api/v1/savings": {
-        get: {
-          tags: ["Savings"],
-          summary:
-            "Savings plan + summary: what's left after the planned withdrawals, per month from next month through `until`. Both null when not set.",
-          responses: { "200": { description: "OK" } },
-        },
-        put: {
-          tags: ["Savings"],
-          summary: "Replace the savings plan",
-          requestBody: body("Savings"),
-          responses: { "200": { description: "OK" }, ...errors },
-        },
-      },
+      ...savingsPaths(),
       ...crud("Income", "incomes", "Income"),
       ...crud("Expense", "expenses", "Expense"),
       ...spendingPaths(),
@@ -215,18 +220,38 @@ export function openApiDocument() {
       "/api/v1/balances": {
         get: {
           tags: ["Balance"],
-          summary: "Balance history, newest first",
+          summary: "Checkpoints (real balances), newest first",
           parameters: [
-            { name: "account", in: "query", schema: { type: "string", enum: ["fixed", "current"] } },
+            { name: "account", in: "query", schema: { type: "string", enum: ["current", "fixed", "savings"] } },
+            { name: "savingsAccountId", in: "query", schema: { type: "integer" } },
             { name: "limit", in: "query", schema: { type: "integer", default: 100 } },
           ],
           responses: { "200": list("Balance"), ...errors },
         },
-        post: { tags: ["Balance"], summary: "Record a balance", requestBody: body("BalanceCreate"), responses: { "201": ok("Balance", "Created"), ...errors } },
+        post: {
+          tags: ["Balance"],
+          summary: "Record a checkpoint: the real balance at the end of `date` (default today), or at `time`. Not in the future.",
+          requestBody: body("BalanceCreate"),
+          responses: { "201": ok("Balance", "Created"), ...errors },
+        },
       },
       "/api/v1/balances/{id}": {
         parameters: idParam,
-        delete: { tags: ["Balance"], summary: "Delete a balance", responses: { "204": { description: "Deleted" }, ...errors } },
+        delete: { tags: ["Balance"], summary: "Delete a checkpoint", responses: { "204": { description: "Deleted" }, ...errors } },
+      },
+      "/api/v1/reconciliation": {
+        get: {
+          tags: ["Balance"],
+          summary:
+            "Expected balance of an account: each checkpoint compared with the one before plus the planned incomes, expenses, transfers (real scenario), spendings (current account) and withdrawals (savings) in between. Returns `expected` (end of `to`), `checkpoints` (with expected and difference = real − expected), `since` (changes after the last checkpoint) and `days` (expected balance per day from `from`).",
+          parameters: [
+            { name: "account", in: "query", required: true, schema: { type: "string", enum: ["current", "fixed", "savings"] } },
+            { name: "savingsAccountId", in: "query", schema: { type: "integer" }, description: "Required for savings" },
+            { name: "from", in: "query", schema: { type: "string", format: "date" }, description: "Default: 30 days before `to`" },
+            { name: "to", in: "query", schema: { type: "string", format: "date" }, description: "Default: today" },
+          ],
+          responses: { "200": { description: "OK" }, ...errors },
+        },
       },
     },
     components: {
@@ -241,7 +266,9 @@ export function openApiDocument() {
         Scenario: schema(scenarioDto),
         ScenarioCreate: schema(scenarioCreate),
         ScenarioPatch: schema(scenarioPatch),
-        Savings: schema(savingsSchema),
+        SavingsAccount: schema(savingsAccountDto),
+        SavingsAccountCreate: schema(savingsAccountCreate),
+        SavingsAccountPatch: schema(savingsAccountPatch),
         Spending: schema(spendingDto),
         SpendingCreate: schema(spendingCreate),
         SpendingPatch: schema(spendingPatch),

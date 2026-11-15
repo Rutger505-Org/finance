@@ -12,7 +12,8 @@ import {
   incomePatch,
   outingCreate,
   outingPatch,
-  savingsSchema,
+  savingsAccountCreate,
+  savingsAccountPatch,
   scenarioCreate,
   scenarioPatch,
   settingsSchema,
@@ -20,6 +21,8 @@ import {
   spendingPatch,
   type Issue,
 } from "@/lib/finance/schemas";
+import { parseDay } from "@/lib/finance/dates";
+import { money } from "@/lib/format";
 import { repository, today } from "@/server/finance";
 import { HttpError } from "@/server/http-error";
 import { revalidatePath } from "next/cache";
@@ -74,8 +77,23 @@ export async function saveSettings(input: unknown) {
   return run(() => repository.putSettings(settingsSchema.parse(input)), "Opgeslagen");
 }
 
+/** Saves a checkpoint; the message says how far off the expected balance was. */
 export async function addBalance(input: unknown) {
-  return run(() => repository.createBalance(balanceCreate.parse(input), today()), "Saldo opgeslagen");
+  let message = "Checkpoint opgeslagen";
+  const result = run(() => {
+    const saved = repository.createBalance(balanceCreate.parse(input), today());
+    const day = parseDay(saved.date);
+    const checked = repository
+      .reconcile(saved.account, saved.savingsAccountId, day, day)
+      .checkpoints.find((checkpoint) => checkpoint.id === saved.id);
+    if (checked?.difference != null) {
+      message =
+        checked.difference === 0
+          ? "Checkpoint opgeslagen: precies wat verwacht werd"
+          : `Checkpoint opgeslagen: ${money(Math.abs(checked.difference))} ${checked.difference > 0 ? "meer" : "minder"} dan verwacht (${money(checked.expected!)})`;
+    }
+  });
+  return result.ok ? { ...result, message } : result;
 }
 
 export async function deleteBalance(id: number) {
@@ -156,6 +174,26 @@ export async function deleteScenario(id: number) {
   return run(() => repository.deleteScenario(id));
 }
 
-export async function saveSavings(input: unknown) {
-  return run(() => repository.putSavings(savingsSchema.parse(input)), "Opgeslagen");
+/** On an existing account, a changed `balance` is saved as a new checkpoint. */
+export async function saveSavingsAccount(
+  id: number | null,
+  input: unknown,
+  balance?: { amount: number; date: string },
+) {
+  return run(() => {
+    if (id === null) return repository.createSavingsAccount(savingsAccountCreate.parse(input), today());
+    const patch = savingsAccountPatch.parse(input);
+    const current = repository.getSavingsAccount(id).balance;
+    if (balance && (current?.amount !== balance.amount || current.date !== balance.date)) {
+      repository.createBalance(
+        balanceCreate.parse({ account: "savings", savingsAccountId: id, amount: balance.amount, date: balance.date }),
+        today(),
+      );
+    }
+    return repository.updateSavingsAccount(id, patch);
+  }, "Opgeslagen");
+}
+
+export async function deleteSavingsAccount(id: number) {
+  return run(() => repository.deleteSavingsAccount(id));
 }
