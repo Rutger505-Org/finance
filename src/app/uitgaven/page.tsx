@@ -7,6 +7,7 @@ import { money, monthLabel } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { OneOffIncomeList } from "./losse-inkomsten/_components/one-off-income-list";
 import { SpendingForm } from "./_components/spending-form";
 import { SpendingList } from "./_components/spending-list";
 
@@ -33,6 +34,8 @@ export default async function SpendingPage({
   const spendings = repository.listSpendings(monthRange(month));
   const lines = spendings.map((s) => ({ ...s, amount: cents(s.amount) }));
   const total = sum(lines);
+  const incomes = repository.listOneOffIncomes(monthRange(month));
+  const received = sum(incomes.map((income) => ({ amount: cents(income.amount) })));
   const name = (list: { id: number; name: string }[], id: number | null, none: string) =>
     id === null ? none : (list.find((item) => item.id === id)?.name ?? `#${id}`);
   const perCategory = totalsBy(lines, "categoryId");
@@ -106,6 +109,23 @@ export default async function SpendingPage({
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Netto: {money(total - received)}</CardTitle>
+          <CardDescription>
+            Uitgegeven {money(total)} − losse inkomsten {money(received)}. Losse inkomsten tellen niet mee in de
+            totalen hierboven; toevoegen bij{" "}
+            <Link href={month === current ? "/uitgaven/losse-inkomsten" : `/uitgaven/losse-inkomsten?maand=${month}`} className="underline">
+              Losse inkomsten
+            </Link>
+            .
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <OneOffIncomeList incomes={incomes} counterparties={lookups.counterparties} today={today} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

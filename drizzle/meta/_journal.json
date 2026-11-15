@@ -57,6 +57,13 @@
       "when": 1794770222951,
       "tag": "0007_savings_accounts_checkpoints",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794773013583,
+      "tag": "0008_one_off_incomes",
+      "breakpoints": true
     }
   ]
 }

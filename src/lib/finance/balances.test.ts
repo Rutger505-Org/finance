@@ -12,7 +12,41 @@ const spending = (date: string, time: string | null, amount: number): Change => 
   kind: "spending",
 });
 
+const oneOffIncome = (date: string, time: string | null, amount: number): Change => ({
+  day: d(date),
+  time,
+  name: "Oude fiets verkocht",
+  amount,
+  kind: "oneOffIncome",
+});
+
 describe("reconcile", () => {
+  test("one-off incomes add to the balance, ordered by time against a checkpoint that day", () => {
+    const result = reconcile(
+      [
+        { id: 1, day: d("2026-10-01"), time: null, amount: 10000 },
+        { id: 2, day: d("2026-10-02"), time: "12:00", amount: 13500 },
+      ],
+      [
+        oneOffIncome("2026-10-01", "23:00", 999),
+        oneOffIncome("2026-10-02", null, 4000),
+        spending("2026-10-02", "11:00", 500),
+        oneOffIncome("2026-10-02", "11:30", 1000),
+        oneOffIncome("2026-10-02", "12:30", 2500),
+      ],
+      d("2026-10-01"),
+      d("2026-10-02"),
+    );
+    // The income at 23:00 on the day of the first checkpoint (end of day) is before it, so already in it.
+    expect(result.checkpoints.map((c) => [c.expected, c.difference])).toEqual([
+      [null, null],
+      [14500, -1000],
+    ]);
+    expect(result.since.map((c) => [c.time, c.amount, c.kind])).toEqual([["12:30", 2500, "oneOffIncome"]]);
+    expect(result.expected).toBe(16000);
+  });
+
+
   test("compares each checkpoint with the one before plus the changes in between", () => {
     const result = reconcile(
       [

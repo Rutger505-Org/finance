@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 const tabs = [
   { href: "/uitgaven", label: "Per maand" },
+  { href: "/uitgaven/losse-inkomsten", label: "Losse inkomsten" },
   { href: "/uitgaven/uitjes", label: "Uitjes" },
   { href: "/uitgaven/tegenrekeningen", label: "Tegenrekeningen" },
   { href: "/uitgaven/categorieen", label: "Categorieën" },

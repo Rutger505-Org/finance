@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { configSchema, cycleSchema, euros, formatIssues } from "./schemas";
+import { bookings, configSchema, cycleSchema, euros, formatIssues, oneOffIncomeCreate } from "./schemas";
 
 describe("schemas", () => {
   test("amounts allow at most 2 decimals", () => {
@@ -54,5 +54,15 @@ describe("schemas", () => {
     if (!result.success) {
       expect(formatIssues(result.error)[0]?.path).toBe("settings.transfers[0].amount.income");
     }
+  });
+
+  test("one-off incomes are positive; a booking takes one instead of a spending", () => {
+    expect(oneOffIncomeCreate.safeParse({ description: "Oude fiets verkocht", amount: 40 }).success).toBe(true);
+    expect(oneOffIncomeCreate.safeParse({ description: "Oude fiets verkocht", amount: 0 }).success).toBe(false);
+    expect(oneOffIncomeCreate.safeParse({ description: "Oude fiets verkocht", amount: -40 }).success).toBe(false);
+    const line = { key: "k", date: "2026-11-02", amount: 25 };
+    const income = { description: "Bijdrage boodschappen", amount: 25 };
+    expect(bookings.safeParse([{ lines: [line], income }]).success).toBe(true);
+    expect(bookings.safeParse([{ lines: [line], income, skip: "x" }]).success).toBe(false);
   });
 });

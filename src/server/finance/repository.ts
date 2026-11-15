@@ -23,6 +23,10 @@ import {
   type IncomeCreate,
   type IncomeDto,
   type IncomePatch,
+  type OneOffIncomeCreate,
+  type OneOffIncomeDto,
+  type OneOffIncomeFilter,
+  type OneOffIncomePatch,
   type OutingCreate,
   type OutingDto,
   type OutingPatch,
@@ -53,6 +57,7 @@ const {
   counterpartyAlias,
   expense,
   income,
+  oneOffIncome,
   outing,
   savingsAccount,
   scenario,
@@ -67,6 +72,7 @@ type BalanceRow = typeof balance.$inferSelect;
 type OutingRow = typeof outing.$inferSelect;
 type CounterpartyRow = typeof counterparty.$inferSelect;
 type SpendingRow = typeof spending.$inferSelect;
+type OneOffIncomeRow = typeof oneOffIncome.$inferSelect;
 
 const toCents = (euros: number) => Math.round(euros * 100);
 const toEuros = (cents: number) => cents / 100;
@@ -149,6 +155,7 @@ function bookedLineDto(row: BookedLineRow): BookedLineDto {
     date: row.date,
     amount: toEuros(row.amount),
     spendingId: row.spendingId,
+    oneOffIncomeId: row.oneOffIncomeId,
     skip: row.skipReason,
   };
 }
@@ -164,6 +171,25 @@ function spendingDto(row: SpendingRow): SpendingDto {
     outingId: row.outingId,
     counterpartyId: row.counterpartyId,
     note: row.note,
+  };
+}
+
+function oneOffIncomeDto(row: OneOffIncomeRow): OneOffIncomeDto {
+  return {
+    id: row.id,
+    date: row.date,
+    time: row.time,
+    amount: toEuros(row.amount),
+    description: row.description,
+    counterpartyId: row.counterpartyId,
+    note: row.note,
+  };
+}
+
+function oneOffIncomeValues(input: OneOffIncomePatch) {
+  return {
+    ...input,
+    amount: input.amount === undefined ? undefined : toCents(input.amount),
   };
 }
 
@@ -352,6 +378,28 @@ export function createRepository(db: Db) {
     return spendingDto(row);
   }
 
+  function insertOneOffIncome(target: Db | Tx, input: OneOffIncomeCreate, today: Day): OneOffIncomeDto {
+    assertRefs(input);
+    const row = target
+      .insert(oneOffIncome)
+      .values({
+        date: input.date ?? isoDay(today),
+        time: input.time ?? null,
+        amount: toCents(input.amount),
+        description: input.description,
+        counterpartyId: input.counterpartyId ?? null,
+        note: input.note ?? null,
+      })
+      .returning()
+      .get();
+    return oneOffIncomeDto(row);
+  }
+
+  function getOneOffIncome(id: number): OneOffIncomeDto {
+    const row = db.select().from(oneOffIncome).where(eq(oneOffIncome.id, id)).get();
+    return row ? oneOffIncomeDto(row) : notFound("One-off income", id);
+  }
+
   /** Replaces the aliases of one kind; an alias of another counterparty is a 409. */
   function setAliases(tx: Tx, counterpartyId: number, kind: AliasRow["kind"], values: string[] | undefined) {
     if (values === undefined) return;
@@ -481,10 +529,11 @@ export function createRepository(db: Db) {
       });
       return getCounterparty(id);
     },
-    /** Its spendings stay, without counterparty. */
+    /** Its spendings and one-off incomes stay, without counterparty. */
     deleteCounterparty(id: number): void {
       db.transaction((tx) => {
         tx.update(spending).set({ counterpartyId: null }).where(eq(spending.counterpartyId, id)).run();
+        tx.update(oneOffIncome).set({ counterpartyId: null }).where(eq(oneOffIncome.counterpartyId, id)).run();
         tx.delete(counterpartyAlias).where(eq(counterpartyAlias.counterpartyId, id)).run();
         const row = tx.delete(counterparty).where(eq(counterparty.id, id)).returning().get();
         if (!row) notFound("Counterparty", id);
@@ -528,6 +577,50 @@ export function createRepository(db: Db) {
       });
     },
 
+    /** Newest first; within a day by time, unknown time last. */
+    listOneOffIncomes(filter: OneOffIncomeFilter = {}): OneOffIncomeDto[] {
+      return db
+        .select()
+        .from(oneOffIncome)
+        .where(
+          and(
+            filter.from ? gte(oneOffIncome.date, filter.from) : undefined,
+            filter.to ? lte(oneOffIncome.date, filter.to) : undefined,
+            filter.counterpartyId ? eq(oneOffIncome.counterpartyId, filter.counterpartyId) : undefined,
+          ),
+        )
+        .orderBy(
+          desc(oneOffIncome.date),
+          sql`${oneOffIncome.time} is null`,
+          desc(oneOffIncome.time),
+          desc(oneOffIncome.id),
+        )
+        .all()
+        .map(oneOffIncomeDto);
+    },
+    getOneOffIncome,
+    createOneOffIncome(input: OneOffIncomeCreate, today: Day): OneOffIncomeDto {
+      return insertOneOffIncome(db, input, today);
+    },
+    updateOneOffIncome(id: number, patch: OneOffIncomePatch): OneOffIncomeDto {
+      assertRefs(patch);
+      const row = db
+        .update(oneOffIncome)
+        .set(oneOffIncomeValues(patch))
+        .where(eq(oneOffIncome.id, id))
+        .returning()
+        .get();
+      return row ? oneOffIncomeDto(row) : notFound("One-off income", id);
+    },
+    /** Its statement lines count as not booked again. */
+    deleteOneOffIncome(id: number): void {
+      db.transaction((tx) => {
+        tx.delete(bookedLine).where(eq(bookedLine.oneOffIncomeId, id)).run();
+        const row = tx.delete(oneOffIncome).where(eq(oneOffIncome.id, id)).returning().get();
+        if (!row) notFound("One-off income", id);
+      });
+    },
+
     listBookedLines(filter: BookedLineFilter = {}): BookedLineDto[] {
       return db
         .select()
@@ -542,46 +635,59 @@ export function createRepository(db: Db) {
         .all()
         .map(bookedLineDto);
     },
-    /** All or nothing: an already booked line is a 409 and nothing is saved. Returns the spending per booking (null when skipped). */
-    book(bookings: Booking[], today: Day): (SpendingDto | null)[] {
+    /**
+     * All or nothing: an already booked line is a 409 and nothing is saved. Returns the created spending or
+     * one-off income per booking (null when skipped).
+     */
+    book(bookings: Booking[], today: Day): (SpendingDto | OneOffIncomeDto | null)[] {
       const keys = bookings.flatMap((item) => item.lines.map((line) => line.key));
       const booked = db.select({ key: bookedLine.key }).from(bookedLine).where(inArray(bookedLine.key, keys)).all();
       if (booked.length > 0) {
         throw new HttpError(409, `Al geboekt: ${booked.map((row) => row.key).join("; ")}`);
       }
       bookings.forEach((item, index) => {
-        if (!("spending" in item)) return;
+        const [field, refs] =
+          "spending" in item ? ["spending", item.spending] : "income" in item ? ["income", item.income] : [];
+        if (!refs) return;
         try {
-          assertRefs(item.spending);
+          assertRefs(refs);
         } catch (error) {
-          if (error instanceof HttpError) throw new HttpError(error.status, `[${index}].spending.${error.message}`);
+          if (error instanceof HttpError) throw new HttpError(error.status, `[${index}].${field}.${error.message}`);
           throw error;
         }
       });
       return db.transaction((tx) =>
         bookings.map((item) => {
-          const created = "spending" in item ? insertSpending(tx, item.spending, today) : null;
+          const spent = "spending" in item ? insertSpending(tx, item.spending, today) : null;
+          const received = "income" in item ? insertOneOffIncome(tx, item.income, today) : null;
           for (const line of item.lines) {
             tx.insert(bookedLine)
               .values({
                 key: line.key,
                 date: line.date,
                 amount: toCents(line.amount),
-                spendingId: created?.id ?? null,
+                spendingId: spent?.id ?? null,
+                oneOffIncomeId: received?.id ?? null,
                 skipReason: "skip" in item ? item.skip : null,
               })
               .run();
           }
-          return created;
+          return spent ?? received;
         }),
       );
     },
-    /** Un-skip a line; booked lines of a spending go with the spending. */
+    /** Un-skip a line; booked lines of a spending or one-off income go with it. */
     deleteBookedLine(key: string): void {
       const row = db.select().from(bookedLine).where(eq(bookedLine.key, key)).get();
       if (!row) throw new HttpError(404, "Line not booked");
       if (row.spendingId !== null) {
         throw new HttpError(409, `Line belongs to spending ${row.spendingId}; delete that spending instead`);
+      }
+      if (row.oneOffIncomeId !== null) {
+        throw new HttpError(
+          409,
+          `Line belongs to one-off income ${row.oneOffIncomeId}; delete that one-off income instead`,
+        );
       }
       db.delete(bookedLine).where(eq(bookedLine.key, key)).run();
     },
@@ -810,8 +916,8 @@ export function createRepository(db: Db) {
     },
     /**
      * An account's checkpoints, each compared with what it should have been, and its expected balance per day
-     * from `from` through `until`: the real scenario's incomes, expenses and transfers, the spendings (current
-     * account) and the planned withdrawals (savings).
+     * from `from` through `until`: the real scenario's incomes, expenses and transfers, the spendings and
+     * one-off incomes (current account) and the planned withdrawals (savings).
      */
     reconcile(account: BalanceAccount, savingsAccountId: number | null, from: Day, until: Day): Reconciliation {
       const rows = db
@@ -843,6 +949,14 @@ export function createRepository(db: Db) {
             .all();
           for (const row of rows) {
             changes.push({ day: parseDay(row.date), time: row.time, name: row.description, amount: -row.amount, kind: "spending" });
+          }
+          const incomes = db
+            .select()
+            .from(oneOffIncome)
+            .where(and(gte(oneOffIncome.date, isoDay(after + 1)), lte(oneOffIncome.date, isoDay(until))))
+            .all();
+          for (const row of incomes) {
+            changes.push({ day: parseDay(row.date), time: row.time, name: row.description, amount: row.amount, kind: "oneOffIncome" });
           }
         }
       }

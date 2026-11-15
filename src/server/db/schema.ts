@@ -161,7 +161,26 @@ export const spending = sqliteTable(
   ],
 );
 
-/** A statement line that has been booked: as (part of) a spending, or skipped. Lines themselves aren't stored. */
+/** Money in that isn't a regular income or a refund: something sold second-hand, a contribution from family. */
+export const oneOffIncome = sqliteTable(
+  "one_off_income",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** YYYY-MM-DD */
+    date: text("date").notNull(),
+    /** HH:MM, as `spending.time`. */
+    time: text("time"),
+    /** Always positive. */
+    amount: integer("amount").notNull(),
+    description: text("description").notNull(),
+    counterpartyId: integer("counterparty_id").references(() => counterparty.id, { onDelete: "set null" }),
+    note: text("note"),
+    ...timestamps,
+  },
+  (table) => [index("one_off_income_date_idx").on(table.date)],
+);
+
+/** A statement line that has been booked: as (part of) a spending or one-off income, or skipped. Lines themselves aren't stored. */
 export const bookedLine = sqliteTable(
   "booked_line",
   {
@@ -172,9 +191,14 @@ export const bookedLine = sqliteTable(
     /** Bank sign: negative is money out. */
     amount: integer("amount").notNull(),
     spendingId: integer("spending_id").references(() => spending.id, { onDelete: "cascade" }),
-    /** Why it isn't a spending (fixed cost, own account, income). */
+    oneOffIncomeId: integer("one_off_income_id").references(() => oneOffIncome.id, { onDelete: "cascade" }),
+    /** Why it is neither (fixed cost, own account, regular income). */
     skipReason: text("skip_reason"),
     createdAt: timestamps.createdAt,
   },
-  (table) => [index("booked_line_date_idx").on(table.date), index("booked_line_spending_idx").on(table.spendingId)],
+  (table) => [
+    index("booked_line_date_idx").on(table.date),
+    index("booked_line_spending_idx").on(table.spendingId),
+    index("booked_line_one_off_income_idx").on(table.oneOffIncomeId),
+  ],
 );

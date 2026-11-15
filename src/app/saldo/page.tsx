@@ -54,6 +54,7 @@ const kindLabels: Record<
     refund: "Terug van vaste lastenrekening",
     expense: "Vaste lasten",
     spending: "Uitgaven",
+    oneOffIncome: "Losse inkomsten",
   },
   fixed: {
     transfer: "Van lopende rekening",

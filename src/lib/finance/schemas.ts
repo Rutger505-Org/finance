@@ -282,9 +282,10 @@ export function isValidIban(value: string): boolean {
 
 /**
  * What a counterparty's statement lines usually are: `spending` (always a spending, default category),
- * `skip` (never: fixed costs, own accounts, income) or `ask` (depends on the line: Tikkies, family).
+ * `income` (a one-off income: a second-hand buyer, family), `skip` (neither: fixed costs, own accounts,
+ * regular income) or `ask` (depends on the line: Tikkies).
  */
-export const counterpartyHandling = z.enum(["spending", "skip", "ask"]);
+export const counterpartyHandling = z.enum(["spending", "income", "skip", "ask"]);
 export type CounterpartyHandling = z.infer<typeof counterpartyHandling>;
 
 /** Case-insensitive part of the name on a statement line ("albert heijn" matches "Albert Heijn 1178"). */
@@ -366,6 +367,36 @@ export type SpendingPatch = z.infer<typeof spendingPatch>;
 export type SpendingDto = z.infer<typeof spendingDto>;
 export type SpendingFilter = z.infer<typeof spendingFilter>;
 
+/** Money in that isn't a regular income or a refund (those are negative spendings): something sold, a gift. */
+const oneOffIncomeFields = {
+  date: isoDate,
+  /** Time on `date`, null when unknown; ordered against checkpoints like a spending's. */
+  time: clockTime.nullable(),
+  amount: euros.refine((value) => value > 0, { message: "Bedrag moet groter dan 0 zijn" }),
+  description: z.string().trim().min(1).max(200),
+  counterpartyId: optionalId,
+  note,
+};
+export const oneOffIncomeCreate = z.strictObject({
+  ...oneOffIncomeFields,
+  /** Defaults to today. */
+  date: isoDate.optional(),
+  time: clockTime.nullable().optional(),
+  counterpartyId: optionalId.optional(),
+  note: note.optional(),
+});
+export const oneOffIncomePatch = z.strictObject(oneOffIncomeFields).partial();
+export const oneOffIncomeDto = z.strictObject({ id, ...oneOffIncomeFields });
+export const oneOffIncomeFilter = z.strictObject({
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+  counterpartyId: z.coerce.number().pipe(id).optional(),
+});
+export type OneOffIncomeCreate = z.infer<typeof oneOffIncomeCreate>;
+export type OneOffIncomePatch = z.infer<typeof oneOffIncomePatch>;
+export type OneOffIncomeDto = z.infer<typeof oneOffIncomeDto>;
+export type OneOffIncomeFilter = z.infer<typeof oneOffIncomeFilter>;
+
 /** A statement line as the booking client sends it: key from the export, booking date, bank sign. */
 const bookedLineInput = z.strictObject({
   key: z.string().min(1).max(2000),
@@ -373,9 +404,10 @@ const bookedLineInput = z.strictObject({
   amount: signedEuros,
 });
 
-/** One or more statement lines that become one spending, or are skipped with a reason. */
+/** One or more statement lines that become one spending or one-off income, or are skipped with a reason. */
 export const booking = z.union([
   z.strictObject({ lines: z.array(bookedLineInput).min(1), spending: spendingCreate }),
+  z.strictObject({ lines: z.array(bookedLineInput).min(1), income: oneOffIncomeCreate }),
   z.strictObject({ lines: z.array(bookedLineInput).min(1), skip: z.string().trim().min(1).max(200) }),
 ]);
 export const bookings = z
@@ -393,6 +425,7 @@ export const bookedLineDto = z.strictObject({
   date: isoDate,
   amount: signedEuros,
   spendingId: id.nullable(),
+  oneOffIncomeId: id.nullable(),
   skip: z.string().nullable(),
 });
 export const bookedLineFilter = z.strictObject({ from: isoDate.optional(), to: isoDate.optional() });

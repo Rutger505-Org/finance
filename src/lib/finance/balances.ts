@@ -7,7 +7,7 @@ import type { BalanceAccount } from "./schemas";
 
 /**
  * - income, refund (fixed-costs → current), transfer (current → fixed-costs), expense (paid from the current
- *   account), spending: the current account
+ *   account), spending, oneOffIncome (money in that isn't a regular income): the current account
  * - transfer, charge (direct debit), refund: the fixed-costs account
  * - withdrawal: a savings account
  */
@@ -18,12 +18,13 @@ export type ChangeKind =
   | "expense"
   | "charge"
   | "spending"
+  | "oneOffIncome"
   | "withdrawal";
 
 /** A planned or booked change of one account's balance. */
 export interface Change {
   day: Day;
-  /** HH:MM, spendings only. Without one it counts before any checkpoint that day. */
+  /** HH:MM, spendings and one-off incomes only. Without one it counts before any checkpoint that day. */
   time: string | null;
   name: string;
   /** Signed: negative is money out. */

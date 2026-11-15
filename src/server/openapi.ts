@@ -15,6 +15,9 @@ import {
   incomeCreate,
   incomeDto,
   incomePatch,
+  oneOffIncomeCreate,
+  oneOffIncomeDto,
+  oneOffIncomePatch,
   outingCreate,
   outingDto,
   outingPatch,
@@ -93,6 +96,24 @@ function spendingPaths() {
       id("outingId"),
       id("counterpartyId"),
     ],
+  });
+  return paths;
+}
+
+function oneOffIncomePaths() {
+  const paths = crud("One-off income", "one-off-incomes", "OneOffIncome");
+  Object.assign(paths["/api/v1/one-off-incomes"].get, {
+    summary:
+      "List one-off incomes (money in that isn't a regular income or a refund: something sold, a contribution), newest first",
+    parameters: [
+      { name: "from", in: "query", schema: { type: "string", format: "date" }, description: "Inclusive" },
+      { name: "to", in: "query", schema: { type: "string", format: "date" }, description: "Inclusive" },
+      { name: "counterpartyId", in: "query", schema: { type: "integer" } },
+    ],
+  });
+  const item = paths["/api/v1/one-off-incomes/{id}"] as unknown as Record<"delete", { summary: string }>;
+  Object.assign(item.delete, {
+    summary: "Delete a one-off income; its booked statement lines are freed",
   });
   return paths;
 }
@@ -176,16 +197,17 @@ export function openApiDocument() {
       ...crud("Income", "incomes", "Income"),
       ...crud("Expense", "expenses", "Expense"),
       ...spendingPaths(),
+      ...oneOffIncomePaths(),
       ...crud("Outing", "outings", "Outing"),
       ...crud("Counterparty", "counterparties", "Counterparty"),
       "/api/v1/bookings": {
         post: {
           tags: ["Booking"],
           summary:
-            "Book statement lines, all or nothing: each item turns its lines into one spending or skips them. An already booked line is a 409. Returns the spending per item (null when skipped).",
+            "Book statement lines, all or nothing: each item turns its lines into one spending (`spending`), one one-off income (`income`) or skips them (`skip`). An already booked line is a 409. Returns the created spending or one-off income per item (null when skipped).",
           requestBody: body("Bookings"),
           responses: {
-            "201": { description: "Booked", content: { "application/json": { schema: { type: "array", items: { anyOf: [ref("Spending"), { type: "null" }] } } } } },
+            "201": { description: "Booked", content: { "application/json": { schema: { type: "array", items: { anyOf: [ref("Spending"), ref("OneOffIncome"), { type: "null" }] } } } } },
             "409": ok("Error", "A line is already booked"),
             ...errors,
           },
@@ -203,9 +225,9 @@ export function openApiDocument() {
         },
         delete: {
           tags: ["Booking"],
-          summary: "Un-skip a line. Lines of a spending are freed by deleting the spending.",
+          summary: "Un-skip a line. Lines of a spending or one-off income are freed by deleting that.",
           parameters: [{ name: "key", in: "query", required: true, schema: { type: "string" } }],
-          responses: { "204": { description: "Deleted" }, "409": ok("Error", "Line belongs to a spending"), ...errors },
+          responses: { "204": { description: "Deleted" }, "409": ok("Error", "Line belongs to a spending or one-off income"), ...errors },
         },
       },
       "/api/v1/categories": {
@@ -243,7 +265,7 @@ export function openApiDocument() {
         get: {
           tags: ["Balance"],
           summary:
-            "Expected balance of an account: each checkpoint compared with the one before plus the planned incomes, expenses, transfers (real scenario), spendings (current account) and withdrawals (savings) in between. Returns `expected` (end of `to`), `checkpoints` (with expected and difference = real − expected), `since` (changes after the last checkpoint) and `days` (expected balance per day from `from`).",
+            "Expected balance of an account: each checkpoint compared with the one before plus the planned incomes, expenses, transfers (real scenario), spendings and one-off incomes (current account) and withdrawals (savings) in between. Returns `expected` (end of `to`), `checkpoints` (with expected and difference = real − expected), `since` (changes after the last checkpoint) and `days` (expected balance per day from `from`).",
           parameters: [
             { name: "account", in: "query", required: true, schema: { type: "string", enum: ["current", "fixed", "savings"] } },
             { name: "savingsAccountId", in: "query", schema: { type: "integer" }, description: "Required for savings" },
@@ -272,6 +294,9 @@ export function openApiDocument() {
         Spending: schema(spendingDto),
         SpendingCreate: schema(spendingCreate),
         SpendingPatch: schema(spendingPatch),
+        OneOffIncome: schema(oneOffIncomeDto),
+        OneOffIncomeCreate: schema(oneOffIncomeCreate),
+        OneOffIncomePatch: schema(oneOffIncomePatch),
         Outing: schema(outingDto),
         OutingCreate: schema(outingCreate),
         OutingPatch: schema(outingPatch),

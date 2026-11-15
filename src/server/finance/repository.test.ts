@@ -267,9 +267,9 @@ describe("repository", () => {
     expect(beer).toMatchObject({ amount: 5.5, date: "2026-10-31" });
     expect(gym).toBeNull();
     expect(repository.listBookedLines({ from: "2026-11-01" })).toEqual([
-      { key: "a", date: "2026-11-01", amount: -3.5, spendingId: beer!.id, skip: null },
-      { key: "b", date: "2026-11-01", amount: -2, spendingId: beer!.id, skip: null },
-      { key: "c", date: "2026-11-01", amount: -30, spendingId: null, skip: "Vaste lasten" },
+      { key: "a", date: "2026-11-01", amount: -3.5, spendingId: beer!.id, oneOffIncomeId: null, skip: null },
+      { key: "b", date: "2026-11-01", amount: -2, spendingId: beer!.id, oneOffIncomeId: null, skip: null },
+      { key: "c", date: "2026-11-01", amount: -30, spendingId: null, oneOffIncomeId: null, skip: "Vaste lasten" },
     ]);
 
     // All or nothing: one booked line rejects the whole batch.
@@ -292,6 +292,93 @@ describe("repository", () => {
     repository.deleteSpending(beer!.id);
     repository.deleteBookedLine("c");
     expect(repository.listBookedLines()).toEqual([]);
+  });
+
+  test("bookings: lines can become a one-off income; deleting it frees them", () => {
+    const buyer = repository.createCounterparty({ name: "Koper", handling: "income" });
+    const line = (key: string, amount: number) => ({ key, date: "2026-11-02", amount });
+    const [bike, beer] = repository.book(
+      [
+        {
+          lines: [line("a", 40)],
+          income: { description: "Oude fiets verkocht", amount: 40, date: "2026-11-02", time: "10:15", counterpartyId: buyer.id },
+        },
+        { lines: [line("b", -4)], spending: { description: "Bier", amount: 4 } },
+      ],
+      today,
+    );
+    expect(bike).toEqual({
+      id: bike!.id,
+      date: "2026-11-02",
+      time: "10:15",
+      amount: 40,
+      description: "Oude fiets verkocht",
+      counterpartyId: buyer.id,
+      note: null,
+    });
+    expect(beer).toMatchObject({ amount: 4, description: "Bier" });
+    expect(repository.listSpendings()).toHaveLength(1);
+    expect(repository.listBookedLines()[0]).toEqual({
+      key: "a",
+      date: "2026-11-02",
+      amount: 40,
+      spendingId: null,
+      oneOffIncomeId: bike!.id,
+      skip: null,
+    });
+
+    // All or nothing: a bad reference in an income rejects the whole batch.
+    expect(() =>
+      repository.book(
+        [
+          { lines: [line("c", 1)], skip: "x" },
+          { lines: [line("d", 25)], income: { description: "Bijdrage boodschappen", amount: 25, counterpartyId: 99 } },
+        ],
+        today,
+      ),
+    ).toThrow("[1].income.counterpartyId");
+    expect(repository.listBookedLines().map((l) => l.key)).toEqual(["a", "b"]);
+
+    expect(() => repository.deleteBookedLine("a")).toThrow("one-off income");
+    repository.deleteOneOffIncome(bike!.id);
+    expect(repository.listBookedLines().map((l) => l.key)).toEqual(["b"]);
+    expect(() => repository.getOneOffIncome(bike!.id)).toThrow(HttpError);
+  });
+
+  test("one-off incomes: crud, filters, order and counterparty delete", () => {
+    const family = repository.createCounterparty({ name: "Familie" });
+    const a = repository.createOneOffIncome({ description: "Bijdrage boodschappen", amount: 25, counterpartyId: family.id }, today);
+    expect(a).toMatchObject({ date: "2026-10-25", time: null, amount: 25, note: null });
+    repository.createOneOffIncome({ description: "Oude fiets verkocht", amount: 40.5, date: "2026-10-25", time: "09:00" }, today);
+    repository.createOneOffIncome({ description: "Boek verkocht", amount: 7, date: "2026-11-01" }, today);
+    expect(repository.listOneOffIncomes({ to: "2026-10-31" }).map((i) => i.description)).toEqual([
+      "Oude fiets verkocht",
+      "Bijdrage boodschappen",
+    ]);
+    expect(repository.listOneOffIncomes({ counterpartyId: family.id }).map((i) => i.id)).toEqual([a.id]);
+    expect(repository.updateOneOffIncome(a.id, { amount: 30, note: "Voor de week" })).toMatchObject({ amount: 30, note: "Voor de week" });
+    expect(() => repository.updateOneOffIncome(a.id, { counterpartyId: 99 })).toThrow("counterpartyId");
+    repository.deleteCounterparty(family.id);
+    expect(repository.getOneOffIncome(a.id).counterpartyId).toBeNull();
+    expect(() => repository.deleteOneOffIncome(999)).toThrow(HttpError);
+  });
+
+  test("reconcile the current account: one-off incomes before and after a checkpoint", () => {
+    repository.createBalance({ account: "current", amount: 100, date: "2026-10-19" }, today);
+    repository.createOneOffIncome({ date: "2026-10-20", amount: 40, description: "Oude fiets verkocht" }, today);
+    repository.createSpending({ date: "2026-10-21", time: "12:00", amount: 10, description: "Lunch" }, today);
+    repository.createOneOffIncome({ date: "2026-10-21", time: "17:00", amount: 5, description: "Boek verkocht" }, today);
+    repository.createBalance({ account: "current", amount: 135, date: "2026-10-21", time: "18:00" }, today);
+    repository.createOneOffIncome({ date: "2026-10-21", time: "19:00", amount: 25, description: "Bijdrage boodschappen" }, today);
+    const result = repository.reconcile("current", null, parseDay("2026-10-19"), today);
+    expect(result.checkpoints.map((c) => [c.amount, c.expected])).toEqual([
+      [10000, null],
+      [13500, 13500],
+    ]);
+    expect(result.since).toEqual([
+      { day: parseDay("2026-10-21"), time: "19:00", name: "Bijdrage boodschappen", amount: 2500, kind: "oneOffIncome" },
+    ]);
+    expect(result.expected).toBe(16000);
   });
 
   test("spending filter by date range", () => {

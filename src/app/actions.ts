@@ -10,6 +10,8 @@ import {
   formatIssues,
   incomeCreate,
   incomePatch,
+  oneOffIncomeCreate,
+  oneOffIncomePatch,
   outingCreate,
   outingPatch,
   savingsAccountCreate,
@@ -110,6 +112,18 @@ export async function saveSpending(id: number | null, input: unknown) {
 
 export async function deleteSpending(id: number) {
   return run(() => repository.deleteSpending(id));
+}
+
+export async function saveOneOffIncome(id: number | null, input: unknown) {
+  return run(() =>
+    id === null
+      ? repository.createOneOffIncome(oneOffIncomeCreate.parse(input), today())
+      : repository.updateOneOffIncome(id, oneOffIncomePatch.parse(input)),
+  );
+}
+
+export async function deleteOneOffIncome(id: number) {
+  return run(() => repository.deleteOneOffIncome(id));
 }
 
 /** Returns the outing's id, so a form can select an outing it just created. */
