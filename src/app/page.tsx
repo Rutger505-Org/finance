@@ -48,8 +48,6 @@ export default async function OverviewPage({
         </div>
       ))}
 
-      testing
-
       <Card>
         <CardHeader>
           <CardTitle>Verwacht saldo: {money(overview.target)}</CardTitle>
