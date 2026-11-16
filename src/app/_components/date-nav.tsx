@@ -2,10 +2,12 @@ import { buttonVariants } from "@/components/ui/button";
 import { isoDay, type Day } from "@/lib/finance/dates";
 import Link from "next/link";
 
-export function DateNav({ day, today }: { day: Day; today: Day }) {
-  const href = (target: Day) => (target === today ? "/" : `/?datum=${isoDay(target)}`);
+/** Previous/next day and a date picker; links to `path` with `?datum=` (none for today), `anchor` keeps the section in view. */
+export function DateNav({ day, today, path = "/", anchor }: { day: Day; today: Day; path?: string; anchor?: string }) {
+  const hash = anchor ? `#${anchor}` : "";
+  const href = (target: Day) => (target === today ? path : `${path}?datum=${isoDay(target)}`) + hash;
   return (
-    <form action="/" className="flex flex-wrap items-center gap-2">
+    <form action={path + hash} className="flex flex-wrap items-center gap-2">
       <Link href={href(day - 1)} className={buttonVariants({ variant: "outline", size: "sm" })} aria-label="Vorige dag">
         ‹
       </Link>
@@ -23,7 +25,7 @@ export function DateNav({ day, today }: { day: Day; today: Day }) {
         ›
       </Link>
       {day !== today && (
-        <Link href="/" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+        <Link href={path + hash} className={buttonVariants({ variant: "ghost", size: "sm" })}>
           Vandaag
         </Link>
       )}

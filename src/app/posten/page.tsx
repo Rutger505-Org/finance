@@ -1,3 +1,4 @@
+import { FixedAccountCard } from "@/app/_components/items/fixed-account-card";
 import {
   ItemsSection,
   type ItemRow,
@@ -13,7 +14,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { isoDay, type Day } from "@/lib/finance/dates";
+import { isValidIsoDate, isoDay, parseDay, type Day } from "@/lib/finance/dates";
 import { inScenario, savingsPerMonth } from "@/lib/finance/savings";
 import { cyclesPerYear } from "@/lib/finance/schedule";
 import type { Cycle } from "@/lib/finance/schemas";
@@ -36,9 +37,18 @@ const perMonth = (items: { amount: number; cycle: Cycle; active: boolean }[]) =>
       0,
     );
 
-/** Incomes and fixed costs of the selected scenario on one page, with what's left per month and the transfers. */
-export default async function PostenPage() {
+/** Incomes and fixed costs of the selected scenario on one page, with what's left per month, the transfers and the fixed-costs account (`?datum=`). */
+export default async function PostenPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const { datum } = await searchParams;
   const today = getToday();
+  const day =
+    typeof datum === "string" && isValidIsoDate(datum)
+      ? parseDay(datum)
+      : today;
   const { scenarios, selected } = await selectedScenario();
   const incomes = inScenario(repository.listIncomes(), selected.id);
   const expenses = inScenario(repository.listExpenses(), selected.id);
@@ -99,7 +109,12 @@ export default async function PostenPage() {
           ...itemRow(item, today),
         }))}
       />
-      {selected.real && <TransfersCard today={today} />}
+      {selected.real && (
+        <>
+          <TransfersCard today={today} />
+          <FixedAccountCard day={day} today={today} />
+        </>
+      )}
     </>
   );
 }
