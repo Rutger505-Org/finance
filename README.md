@@ -49,6 +49,8 @@ git pull && docker compose up -d --build   # update
 
 Data lives in the `finance-data` volume (`docker compose down -v` deletes it). The app restarts with Docker; enable "Start Docker Desktop when you sign in" to have it running after boot. `PORT` and `TIME_ZONE` can be overridden in a `.env` next to `compose.yaml`. There is no auth: keep it local.
 
+Update banner: compose passes `.git` to the build (`git-dir` context), the image keeps the commit in `commit.txt`, and `/api/update` compares it hourly with `main` on GitHub (`src/server/update.ts`). Behind → a banner above the header with the update command. Images built without it (CI, plain `docker build`) have no commit and never show it. Needs BuildKit (buildx, part of Docker Desktop).
+
 ## Development
 
 ```sh

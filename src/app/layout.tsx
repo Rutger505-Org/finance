@@ -1,6 +1,7 @@
 // Validate environment on every page
 import "@/env";
 
+import { UpdateBanner } from "@/components/update-banner";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
@@ -39,6 +40,7 @@ export default function RootLayout({
   return (
     <html lang="nl">
       <body className={`${geistSans.variable} ${geistMono.variable} bg-muted/40 antialiased`}>
+        <UpdateBanner />
         <header className="border-b bg-background">
           <nav className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
             <Link href="/" className="font-semibold">

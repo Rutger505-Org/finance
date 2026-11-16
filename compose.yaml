@@ -6,6 +6,8 @@ services:
     build:
       context: .
       target: production
+      additional_contexts:
+        git-dir: .git
     command: ["bun", "db:migrate"]
     volumes:
       - finance-data:/app/data
@@ -15,6 +17,8 @@ services:
     build:
       context: .
       target: production
+      additional_contexts:
+        git-dir: .git
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"

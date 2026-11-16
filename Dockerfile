@@ -23,6 +23,10 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
 
+# Empty unless compose.yaml passes the repo's .git as the "git-dir" build context.
+FROM scratch AS git-dir
+
+
 FROM base AS builder
 
 # Client side environment variables must be set here.
@@ -32,6 +36,16 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 RUN SKIP_ENV_VALIDATION=1 bun run build
+
+# Commit this build is from, for the update banner (src/server/update.ts). Empty without git-dir.
+RUN --mount=from=git-dir,target=/git \
+    head=$(cat /git/HEAD 2>/dev/null); \
+    case "$head" in \
+      "ref: "*) ref=${head#ref: }; \
+        commit=$(cat "/git/$ref" 2>/dev/null || grep " $ref\$" /git/packed-refs 2>/dev/null | cut -d" " -f1) ;; \
+      *) commit=$head ;; \
+    esac; \
+    echo "$commit" > commit.txt
 
 
 FROM base AS production
@@ -53,6 +67,7 @@ COPY --chown=nextjs:nodejs drizzle ./drizzle
 # Web application
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/commit.txt ./
 
 EXPOSE 3000
 ENV PORT=3000
