@@ -12,6 +12,9 @@ services:
 
   app:
     image: finance
+    build:
+      context: .
+      target: production
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"
