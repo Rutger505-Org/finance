@@ -1,10 +1,12 @@
 import { SpendingList } from "@/app/uitgaven/_components/spending-list";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { isoDay, parseDay } from "@/lib/finance/dates";
+import { outingKey, outingTotals, recurringOutings, trendHref } from "@/lib/finance/outing-trend";
 import { sum, totalsBy } from "@/lib/finance/spending";
 import { dateLong, money } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { OutingActions, OutingForm } from "./_components/outing-form";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +23,8 @@ export default function OutingsPage() {
     counterparties: repository.listCounterparties(),
   };
   const linked = repository.listSpendings().filter((s) => s.outingId !== null);
+  const recurring = recurringOutings(lookups.outings, outingTotals(linked));
+  const recurringNames = new Set(recurring.map((g) => g.name));
   const categoryName = (id: number | null) =>
     id === null ? "Geen categorie" : (lookups.categories.find((c) => c.id === id)?.name ?? `#${id}`);
 
@@ -39,6 +43,25 @@ export default function OutingsPage() {
         </CardContent>
       </Card>
 
+      {recurring.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Terugkerende uitjes</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-wrap gap-2 text-sm">
+              {recurring.map((group) => (
+                <li key={group.name}>
+                  <Link href={trendHref(group.name)} className="bg-muted hover:bg-muted/70 block rounded px-2 py-1">
+                    {group.name} <span className="text-muted-foreground">{group.points.length}×</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
       {lookups.outings.length === 0 && <p className="text-muted-foreground text-sm">Nog geen uitjes.</p>}
 
       {lookups.outings.map((outing) => {
@@ -48,7 +71,15 @@ export default function OutingsPage() {
           <Card key={outing.id}>
             <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
               <div className="space-y-1">
-                <CardTitle>{outing.name}</CardTitle>
+                <CardTitle>
+                  {recurringNames.has(outingKey(outing.name)) ? (
+                    <Link href={trendHref(outing.name)} className="hover:underline" title="Bekijk het verloop">
+                      {outing.name}
+                    </Link>
+                  ) : (
+                    outing.name
+                  )}
+                </CardTitle>
                 <CardDescription className="first-letter:uppercase">
                   {[outing.date && dateLong(parseDay(outing.date)), outing.note].filter(Boolean).join(" · ") ||
                     "Geen datum"}

@@ -18,8 +18,16 @@ const longDate = new Intl.DateTimeFormat("nl-NL", {
   year: "numeric",
   timeZone: "UTC",
 });
+const compactDate = new Intl.DateTimeFormat("nl-NL", {
+  day: "numeric",
+  month: "short",
+  year: "2-digit",
+  timeZone: "UTC",
+});
 const toDate = (day: Day) => new Date(day * 86_400_000);
 export const date = (day: Day): string => shortDate.format(toDate(day));
+/** "16 nov 26": short, with year, for chart axes. */
+export const dateCompact = (day: Day): string => compactDate.format(toDate(day));
 export const dateLong = (day: Day): string => longDate.format(toDate(day));
 
 export function relativeDate(day: Day, today: Day): string {
