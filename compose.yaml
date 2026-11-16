@@ -1,0 +1,27 @@
+# Run the app locally with Docker: docker compose up -d --build
+# Data lives in the finance-data volume; `docker compose down -v` deletes it.
+services:
+  migrate:
+    image: finance
+    build:
+      context: .
+      target: production
+    command: ["bun", "db:migrate"]
+    volumes:
+      - finance-data:/app/data
+
+  app:
+    image: finance
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      TIME_ZONE: ${TIME_ZONE:-Europe/Amsterdam}
+    volumes:
+      - finance-data:/app/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  finance-data:

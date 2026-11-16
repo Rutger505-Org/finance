@@ -40,6 +40,15 @@ curl -s -X POST -H 'content-type: application/json' \
   -d '{"account":"current","amount":450}' https://finance.homelab.rutgerpronk.com/api/v1/balances
 ```
 
+## Running with Docker
+
+```sh
+docker compose up -d --build   # http://localhost:3000, migrates on every start
+git pull && docker compose up -d --build   # update
+```
+
+Data lives in the `finance-data` volume (`docker compose down -v` deletes it). The app restarts with Docker; enable "Start Docker Desktop when you sign in" to have it running after boot. `PORT` and `TIME_ZONE` can be overridden in a `.env` next to `compose.yaml`. There is no auth: keep it local.
+
 ## Development
 
 ```sh
