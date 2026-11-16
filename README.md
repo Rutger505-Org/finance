@@ -20,7 +20,7 @@ Cycles: `monthly` (`day`, moved to the last day of shorter months), `yearly` (`m
 
 ## Using it
 
-- **UI:** Overzicht, Posten (incomes, fixed costs and the transfers to the fixed-costs account, per scenario; for the real one also the required balance of the fixed-costs account per expense, any day via `?datum=YYYY-MM-DD`), Saldo (checkpoints, expected balance per account, chart of the last two months), Spaargeld (savings accounts), Uitgaven with subpages: per maand (`?maand=YYYY-MM`, with the month's one-off incomes and net), Losse inkomsten (`?maand=YYYY-MM`), Uitjes (outings with totals per category), Tegenrekeningen, Categorieën.
+- **UI:** Overzicht (dashboard: free to spend, this month vs last month, per week, top categories and counterparties, outings, balances, fun facts), Posten (incomes, fixed costs and the transfers to the fixed-costs account, per scenario; for the real one also the required balance of the fixed-costs account per expense, any day via `?datum=YYYY-MM-DD`), Saldo (checkpoints, expected balance per account, chart of the last two months), Spaargeld (savings accounts), Uitgaven with subpages: per maand (`?maand=YYYY-MM`, with the month's one-off incomes and net), Losse inkomsten (`?maand=YYYY-MM`), Uitjes (outings with totals per category), Tegenrekeningen, Categorieën.
 - **API:** `/api/v1`, spec at `/api/v1/openapi.json`. Amounts are euros (max 2 decimals), dates `YYYY-MM-DD`, times `HH:MM`.
   - `GET /overview?date=&days=`
   - `GET|PUT /config`: settings + incomes + expenses. Items with an `id` are updated, without one created, missing ones deleted. Balances are not touched.
