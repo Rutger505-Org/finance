@@ -22,6 +22,7 @@ import {
   weeklyTotals,
   type InsightSpending,
 } from "@/lib/finance/insights";
+import { savingsBalance } from "@/lib/finance/savings";
 import { outingTotals, recurringOutings, trendStats } from "@/lib/finance/outing-trend";
 import { dateLong, money } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
@@ -94,12 +95,16 @@ function balances(): AccountBalance[] {
     latest("current"),
     latest("fixed"),
     ...repository.listSavingsAccounts().map(
-      (account): AccountBalance => ({
-        key: `savings-${account.id}`,
-        label: account.name,
-        amount: account.balance ? cents(account.balance.amount) : null,
-        day: account.balance ? parseDay(account.balance.date) : null,
-      }),
+      (account): AccountBalance => {
+        const amount = savingsBalance(account);
+        const dates = [account.balance?.date, ...account.transfers.map((t) => t.date)].filter((d) => d !== undefined);
+        return {
+          key: `savings-${account.id}`,
+          label: account.name,
+          amount: amount === null ? null : cents(amount),
+          day: amount === null ? null : parseDay(dates.sort().at(-1)!),
+        };
+      },
     ),
   ];
 }

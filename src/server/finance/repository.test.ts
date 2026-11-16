@@ -175,7 +175,7 @@ describe("repository", () => {
     const line = (key: string, amount: number) => ({ key, date: "2026-10-03", amount });
     repository.book(
       [
-        { lines: [line("own", -100)], skip: "Eigen rekening" },
+        { lines: [line("own", -100)], skip: "Own account" },
         { lines: [line("beer", -5)], spending: { description: "Bier", amount: 5 } },
       ],
       today,
@@ -184,7 +184,7 @@ describe("repository", () => {
     expect(() => repository.convertToSavings({ key: "nope", account: buffer.id })).toThrow("not booked");
     expect(() => repository.convertToSavings({ key: "own", account: 99 })).toThrow("account");
     const transfer = repository.convertToSavings({ key: "own", account: "Buffer" });
-    expect(transfer).toMatchObject({ savingsAccountId: buffer.id, date: "2026-10-03", time: null, amount: -100, description: "Eigen rekening" });
+    expect(transfer).toMatchObject({ savingsAccountId: buffer.id, date: "2026-10-03", time: null, amount: -100, description: "Own account" });
     expect(repository.listBookedLines().find((l) => l.key === "own")).toMatchObject({ skip: null, savingsTransferId: transfer.id });
     expect(() => repository.convertToSavings({ key: "own", account: buffer.id })).toThrow("Only a skipped line");
   });
