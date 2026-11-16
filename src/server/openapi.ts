@@ -5,8 +5,8 @@ import {
   bookings,
   categoryCreate,
   categoryDto,
+  categoryPatch,
   configSchema,
-  convertToSavings,
   counterpartyCreate,
   counterpartyDto,
   counterpartyPatch,
@@ -22,6 +22,7 @@ import {
   outingCreate,
   outingDto,
   outingPatch,
+  rebook,
   savingsAccountCreate,
   savingsAccountDto,
   savingsAccountPatch,
@@ -241,7 +242,7 @@ export function openApiDocument() {
         post: {
           tags: ["Booking"],
           summary:
-            "Book statement lines, all or nothing: each item turns its lines into one spending (`spending`), one one-off income (`income`), one savings transfer (`savings`: current-account lines to or from a savings account, `account` = id, name or IBAN; amount defaults to the lines' sum, bank sign, date to the first line's) or skips them (`skip`). An already booked line is a 409. Returns the created spending, one-off income or savings transfer per item (null when skipped).",
+            'Book statement lines, all or nothing: each item turns its lines into one spending (`spending`), one one-off income (`income`), one savings transfer (`savings`: current-account lines to or from a savings account, `account` = id, name or IBAN; amount defaults to the lines\' sum, bank sign, date to the first line\'s) or links them to a plan occurrence (`plan`): `{ kind: "income", incomeId, date }` (its day), `{ kind: "expense", expenseId, date }` (an expense paid from the current account, its due day), `{ kind: "refund", expenseId, date }` (fixed-costs → current, the refund day: the day before the due day), `{ kind: "transfer", transfer: <name in settings>, date }` (current → fixed-costs, its day) or `{ kind: "fixed" }` (money between current and fixed-costs account outside the plan). The item must be active and in the real scenario and `date` a real occurrence (the error lists the nearest); income and refund lines are money in, expense and transfer lines money out. Several lines, also in separate bookings, may link to one occurrence; reconciliation then uses their real date and amount instead of the planned ones. `skip` is no longer accepted (400). An already booked line is a 409. Returns the created spending, one-off income or savings transfer per item (null for a plan item).',
           requestBody: body("Bookings"),
           responses: {
             "201": { description: "Booked", content: { "application/json": { schema: { type: "array", items: { anyOf: [ref("Spending"), ref("OneOffIncome"), ref("SavingsTransfer"), { type: "null" }] } } } } },
@@ -262,8 +263,16 @@ export function openApiDocument() {
         },
         delete: {
           tags: ["Booking"],
-          summary: "Un-skip a line. Lines of a spending, one-off income or savings transfer are freed by deleting that.",
-          parameters: [{ name: "key", in: "query", required: true, schema: { type: "string" } }],
+          summary:
+            "Unbook a skipped (old) or plan-linked line. Lines of a spending, one-off income or savings transfer are freed by deleting that.",
+          parameters: [
+            {
+              name: "key",
+              in: "query",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
           responses: {
             "204": { description: "Deleted" },
             "409": ok("Error", "Line belongs to a spending, one-off income or savings transfer"),
@@ -271,27 +280,60 @@ export function openApiDocument() {
           },
         },
       },
-      "/api/v1/booked-lines/convert-to-savings": {
+      "/api/v1/booked-lines/rebook": {
         post: {
           tags: ["Booking"],
           summary:
-            "Turn a skipped line (own-account transfer) into a savings transfer with the line's date and amount, without un-booking it. The skip reason is cleared (it becomes the default description) and the line links the transfer.",
-          requestBody: body("ConvertToSavings"),
+            "Book already booked lines anew, atomically: their current booking is removed (its spending, one-off income or savings transfer is deleted; 400 when another line not in `keys` belongs to it too) and `booking` (a booking item without `lines`) is made from the lines' saved date and amount, in the order of `keys`. Use it for old skipped lines too. Returns the created spending, one-off income or savings transfer (null for a plan item).",
+          requestBody: body("Rebook"),
           responses: {
-            "201": ok("SavingsTransfer", "Converted"),
-            "409": ok("Error", "Line isn't (only) skipped"),
+            "201": {
+              description: "Rebooked",
+              content: {
+                "application/json": {
+                  schema: {
+                    anyOf: [
+                      ref("Spending"),
+                      ref("OneOffIncome"),
+                      ref("SavingsTransfer"),
+                      { type: "null" },
+                    ],
+                  },
+                },
+              },
+            },
             ...errors,
           },
         },
       },
       "/api/v1/categories": {
-        get: { tags: ["Category"], summary: "List categories", responses: { "200": list("Category") } },
-        post: { tags: ["Category"], summary: "Create a category", requestBody: body("CategoryCreate"), responses: { "201": ok("Category", "Created"), ...errors } },
+        get: {
+          tags: ["Category"],
+          summary:
+            "List categories. `excluded`: its spendings don't count in spending insights, charts and totals (balances keep them).",
+          responses: { "200": list("Category") },
+        },
+        post: {
+          tags: ["Category"],
+          summary: "Create a category",
+          requestBody: body("CategoryCreate"),
+          responses: { "201": ok("Category", "Created"), ...errors },
+        },
       },
       "/api/v1/categories/{id}": {
         parameters: idParam,
-        patch: { tags: ["Category"], summary: "Rename a category", requestBody: body("CategoryCreate"), responses: { "200": ok("Category"), ...errors } },
-        delete: { tags: ["Category"], summary: "Delete a category; its spendings and counterparties lose it", responses: { "204": { description: "Deleted" }, ...errors } },
+        patch: {
+          tags: ["Category"],
+          summary: "Rename a category or set `excluded`",
+          requestBody: body("CategoryPatch"),
+          responses: { "200": ok("Category"), ...errors },
+        },
+        delete: {
+          tags: ["Category"],
+          summary:
+            "Delete a category; its spendings and counterparties lose it",
+          responses: { "204": { description: "Deleted" }, ...errors },
+        },
       },
       "/api/v1/balances": {
         get: {
@@ -319,7 +361,7 @@ export function openApiDocument() {
         get: {
           tags: ["Balance"],
           summary:
-            "Expected balance of an account: each checkpoint compared with the one before plus the planned incomes, expenses, transfers (real scenario), spendings and one-off incomes (current account), savings transfers (both accounts) and planned withdrawals after today (savings) in between. Returns `expected` (end of `to`), `checkpoints` (with expected and difference = real − expected), `since` (changes after the last checkpoint) and `days` (expected balance per day from `from`).",
+            "Expected balance of an account: each checkpoint compared with the one before plus the planned incomes, expenses, transfers (real scenario), spendings and one-off incomes (current account), savings transfers (both accounts) and planned withdrawals after today (savings) in between. A planned occurrence with booked lines linked to it (see POST /bookings, `plan`) is replaced by those lines: real date and amount. Returns `expected` (end of `to`), `checkpoints` (with expected, difference = real − expected and `changes` since the checkpoint before), `since` (changes after the last checkpoint), `days` (expected balance per day from `from`) and `skippedLines` (old skipped lines, which count nowhere; 0 for savings). A change is `{ date, time, name, amount, kind, planned, plan }`: `planned` is true for a planned occurrence without a linked line (counted as planned); `plan` is set on a linked line: `{ date, amount, real }` = planned date and amount (null when the item is no longer in the plan) and the real amount of all lines linked to that occurrence.",
           parameters: [
             { name: "account", in: "query", required: true, schema: { type: "string", enum: ["current", "fixed", "savings"] } },
             { name: "savingsAccountId", in: "query", schema: { type: "integer" }, description: "Required for savings" },
@@ -347,7 +389,6 @@ export function openApiDocument() {
         SavingsAccountPatch: schema(savingsAccountPatch),
         SavingsTransfer: schema(savingsTransferDto),
         SavingsTransferCreate: schema(savingsTransferCreate),
-        ConvertToSavings: schema(convertToSavings),
         Spending: schema(spendingDto),
         SpendingCreate: schema(spendingCreate),
         SpendingPatch: schema(spendingPatch),
@@ -362,8 +403,10 @@ export function openApiDocument() {
         CounterpartyPatch: schema(counterpartyPatch),
         Bookings: schema(bookings),
         BookedLine: schema(bookedLineDto),
+        Rebook: schema(rebook),
         Category: schema(categoryDto),
         CategoryCreate: schema(categoryCreate),
+        CategoryPatch: schema(categoryPatch),
         Balance: schema(balanceDto),
         BalanceCreate: schema(balanceCreate),
         Config: schema(configSchema),

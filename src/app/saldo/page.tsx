@@ -24,7 +24,7 @@ import type { Metadata } from "next";
 import { CheckpointForm } from "./_components/checkpoint-form";
 import { CheckpointList } from "./_components/checkpoint-list";
 import { SaldoView } from "./_components/saldo-view";
-import type { AccountView } from "./_components/types";
+import type { AccountView, ChangeItem } from "./_components/types";
 
 export const dynamic = "force-dynamic";
 
@@ -57,11 +57,13 @@ const kindLabels: Record<
     oneOffIncome: "Losse inkomsten",
     fromSavings: "Van spaarrekening",
     toSavings: "Naar spaarrekening",
+    unplannedTransfer: "Vaste lastenrekening, buiten het plan",
   },
   fixed: {
     transfer: "Van lopende rekening",
     charge: "Incasso's",
     refund: "Terug naar lopende rekening",
+    unplannedTransfer: "Lopende rekening, buiten het plan",
   },
   savings: {
     toCurrent: "Naar lopende rekening",
@@ -70,25 +72,39 @@ const kindLabels: Record<
   },
 };
 
+function changeItem(account: BalanceAccount, change: Change): ChangeItem {
+  return {
+    date: isoDay(change.day),
+    time: change.time,
+    name: change.name,
+    amount: change.amount,
+    label: kindLabels[account][change.kind] ?? change.kind,
+    planned: change.planned ?? false,
+    plan: change.plan
+      ? {
+          date: isoDay(change.plan.day),
+          amount: change.plan.amount,
+          real: change.plan.real,
+        }
+      : null,
+  };
+}
+
 function groupSince(
   account: BalanceAccount,
   changes: Change[],
 ): AccountView["since"] {
   const groups = new Map<ChangeKind, AccountView["since"][number]>();
   for (const change of changes) {
+    const item = changeItem(account, change);
     const group = groups.get(change.kind) ?? {
       kind: change.kind,
-      label: kindLabels[account][change.kind] ?? change.kind,
+      label: item.label,
       total: 0,
       items: [],
     };
     group.total += change.amount;
-    group.items.push({
-      date: isoDay(change.day),
-      time: change.time,
-      name: change.name,
-      amount: change.amount,
-    });
+    group.items.push(item);
     groups.set(change.kind, group);
   }
   return [...groups.values()];
@@ -145,11 +161,19 @@ export default function SaldoPage() {
           amount: checkpoint.amount,
           expected: checkpoint.expected,
           difference: checkpoint.difference,
+          // Only where it's off: that's where you look for what's missing.
+          changes:
+            checkpoint.difference === null || checkpoint.difference === 0
+              ? []
+              : checkpoint.changes.map((change) =>
+                  changeItem(account.account, change),
+                ),
         }))
         .reverse(),
       since: groupSince(account.account, result.since),
     };
   });
+  const skipped = repository.countSkippedLines();
   const off = views.filter((view) => {
     const last = view.checkpoints[0];
     return last?.difference != null && !matches(last.difference);
@@ -170,6 +194,13 @@ export default function SaldoPage() {
           Laatste checkpoint wijkt af bij{" "}
           {off.map((view) => view.label).join(", ")}.
         </div>
+      )}
+      {skipped > 0 && (
+        <p className="text-muted-foreground text-sm">
+          {skipped} overgeslagen {skipped === 1 ? "bankregel" : "bankregels"}{" "}
+          uit oudere boekingen: {skipped === 1 ? "telt" : "tellen"} niet mee.
+          Boek ze opnieuw als uitgave, inkomst, spaaroverboeking of vaste post.
+        </p>
       )}
       <Card>
         <CardHeader>

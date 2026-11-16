@@ -1,7 +1,12 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { parseDay } from "@/lib/finance/dates";
-import { counterpartyCreate, savingsAccountCreate } from "@/lib/finance/schemas";
+import {
+  counterpartyCreate,
+  savingsAccountCreate,
+  type PlanBooking,
+} from "@/lib/finance/schemas";
+import { counted } from "@/lib/finance/spending";
 import * as schema from "@/server/db/schema";
 import { HttpError } from "@/server/http-error";
 import { drizzle } from "drizzle-orm/bun-sqlite";
@@ -9,13 +14,26 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { createRepository, type Repository } from "./repository";
 
 let repository: Repository;
+let db: ReturnType<typeof drizzle<typeof schema>>;
 const today = parseDay("2026-10-25");
 
 beforeEach(() => {
-  const db = drizzle(new Database(":memory:"), { schema });
+  db = drizzle(new Database(":memory:"), { schema });
   migrate(db, { migrationsFolder: "./drizzle" });
   repository = createRepository(db);
 });
+
+/** A line skipped by an old booking: new bookings can't skip. */
+const insertSkipped = (
+  key: string,
+  date: string,
+  cents: number,
+  reason = "Eigen rekening",
+) =>
+  db
+    .insert(schema.bookedLine)
+    .values({ key, date, amount: cents, skipReason: reason })
+    .run();
 
 const monthly = (day: number) => ({ type: "monthly", day }) as const;
 
@@ -170,23 +188,104 @@ describe("repository", () => {
     expect(repository.listSavingsTransfers()).toEqual([]);
   });
 
-  test("a skipped line converts to a savings transfer", () => {
+  test("rebook: an old skipped line becomes a savings transfer, a spending's lines move together", () => {
     const buffer = repository.createSavingsAccount({ name: "Buffer" }, today);
-    const line = (key: string, amount: number) => ({ key, date: "2026-10-03", amount });
-    repository.book(
+    insertSkipped("own", "2026-10-03", -10000);
+    const line = (key: string, amount: number) => ({
+      key,
+      date: "2026-10-03",
+      amount,
+    });
+    const [beer] = repository.book(
       [
-        { lines: [line("own", -100)], skip: "Own account" },
-        { lines: [line("beer", -5)], spending: { description: "Bier", amount: 5 } },
+        {
+          lines: [line("beer", -5), line("beer2", -1)],
+          spending: { description: "Bier", amount: 6 },
+        },
       ],
       today,
     );
-    expect(() => repository.convertToSavings({ key: "beer", account: buffer.id })).toThrow("Only a skipped line");
-    expect(() => repository.convertToSavings({ key: "nope", account: buffer.id })).toThrow("not booked");
-    expect(() => repository.convertToSavings({ key: "own", account: 99 })).toThrow("account");
-    const transfer = repository.convertToSavings({ key: "own", account: "Buffer" });
-    expect(transfer).toMatchObject({ savingsAccountId: buffer.id, date: "2026-10-03", time: null, amount: -100, description: "Own account" });
-    expect(repository.listBookedLines().find((l) => l.key === "own")).toMatchObject({ skip: null, savingsTransferId: transfer.id });
-    expect(() => repository.convertToSavings({ key: "own", account: buffer.id })).toThrow("Only a skipped line");
+    expect(repository.countSkippedLines()).toBe(1);
+
+    expect(() =>
+      repository.rebook(
+        { keys: ["nope"], booking: { plan: { kind: "fixed" } } },
+        today,
+      ),
+    ).toThrow("not booked: nope");
+    expect(() =>
+      repository.rebook(
+        {
+          keys: ["own"],
+          booking: { savings: { account: 99, description: "x" } },
+        },
+        today,
+      ),
+    ).toThrow("booking.savings.account");
+    const transfer = repository.rebook(
+      {
+        keys: ["own"],
+        booking: { savings: { account: "Buffer", description: "Sparen" } },
+      },
+      today,
+    );
+    expect(transfer).toMatchObject({
+      savingsAccountId: buffer.id,
+      date: "2026-10-03",
+      amount: -100,
+      description: "Sparen",
+    });
+    expect(
+      repository.listBookedLines().find((l) => l.key === "own"),
+    ).toMatchObject({ skip: null, savingsTransferId: transfer!.id });
+    expect(repository.countSkippedLines()).toBe(0);
+
+    // Another line of the same spending must come along.
+    expect(() =>
+      repository.rebook(
+        { keys: ["beer"], booking: { plan: { kind: "fixed" } } },
+        today,
+      ),
+    ).toThrow(`line beer2 also belongs to spending ${beer!.id}`);
+    // Atomic: a bad new booking keeps the old one.
+    expect(() =>
+      repository.rebook(
+        {
+          keys: ["beer", "beer2"],
+          booking: { spending: { description: "x", amount: 6, outingId: 99 } },
+        },
+        today,
+      ),
+    ).toThrow("booking.spending.outingId");
+    expect(repository.listSpendings()).toHaveLength(1);
+    const coffee = repository.rebook(
+      {
+        keys: ["beer", "beer2"],
+        booking: { spending: { description: "Koffie", amount: 6 } },
+      },
+      today,
+    );
+    expect(repository.listSpendings().map((s) => s.description)).toEqual([
+      "Koffie",
+    ]);
+    expect(
+      repository
+        .listBookedLines()
+        .filter((l) => l.spendingId === coffee!.id)
+        .map((l) => l.key),
+    ).toEqual(["beer", "beer2"]);
+
+    // The transfer goes when its line is rebooked; a plan link returns null.
+    expect(
+      repository.rebook(
+        { keys: ["own"], booking: { plan: { kind: "fixed" } } },
+        today,
+      ),
+    ).toBeNull();
+    expect(repository.listSavingsTransfers()).toEqual([]);
+    expect(
+      repository.listBookedLines().find((l) => l.key === "own"),
+    ).toMatchObject({ plan: { kind: "fixed" }, savingsTransferId: null });
   });
 
   test("reconcile a savings account: planned withdrawals only after today", () => {
@@ -225,6 +324,312 @@ describe("repository", () => {
     ]);
     expect(result.expected).toBe(55000);
     expect(result.days[0]?.balance).toBeNull();
+  });
+
+  test("plan links: item active in the real scenario, a real occurrence, the right sign", () => {
+    const other = repository.createScenario({ name: "Ander huis" });
+    const salary = repository.createIncome({
+      name: "Salaris",
+      amount: 500,
+      cycle: monthly(25),
+      main: true,
+    });
+    const phone = repository.createExpense({
+      name: "Telefoon",
+      amount: 20,
+      cycle: monthly(10),
+      account: "current",
+    });
+    const insurance = repository.createExpense({
+      name: "Verzekering",
+      amount: 30,
+      cycle: monthly(5),
+      account: "fixed",
+    });
+    const old = repository.createIncome({
+      name: "Oud",
+      amount: 1,
+      cycle: monthly(1),
+      active: false,
+    });
+    const elsewhere = repository.createIncome({
+      name: "Daar",
+      amount: 1,
+      cycle: monthly(1),
+      scenarioIds: [other.id],
+    });
+    repository.putSettings({
+      transfers: [
+        { name: "Naar vaste lasten", cycle: monthly(26), amount: 20 },
+      ],
+    });
+    const book = (amount: number, plan: PlanBooking) =>
+      repository.book(
+        [{ lines: [{ key: "x", date: "2026-10-10", amount }], plan }],
+        today,
+      );
+
+    expect(() =>
+      book(500, { kind: "income", incomeId: 99, date: "2026-09-25" }),
+    ).toThrow("[0].plan.incomeId: income 99 does not exist");
+    expect(() =>
+      book(1, { kind: "income", incomeId: old.id, date: "2026-10-01" }),
+    ).toThrow(`income ${old.id} is inactive`);
+    expect(() =>
+      book(1, { kind: "income", incomeId: elsewhere.id, date: "2026-10-01" }),
+    ).toThrow("not in the real scenario");
+    expect(() =>
+      book(500, { kind: "income", incomeId: salary.id, date: "2026-10-24" }),
+    ).toThrow(
+      `[0].plan.date: 2026-10-24 is not a day of income ${salary.id} (Salaris); nearest: 2026-09-25, 2026-10-25, 2026-11-25`,
+    );
+    expect(() =>
+      book(-500, { kind: "income", incomeId: salary.id, date: "2026-10-25" }),
+    ).toThrow(
+      "[0].lines[0].amount: -500 doesn't fit income, which is money in (positive)",
+    );
+    expect(() =>
+      book(-30, {
+        kind: "expense",
+        expenseId: insurance.id,
+        date: "2026-10-05",
+      }),
+    ).toThrow("fixed-costs account");
+    expect(() =>
+      book(20, { kind: "expense", expenseId: phone.id, date: "2026-10-10" }),
+    ).toThrow("money out");
+    expect(() =>
+      book(20, { kind: "refund", expenseId: phone.id, date: "2026-10-10" }),
+    ).toThrow(
+      `is not a refund day (the day before a due day) of expense ${phone.id} (Telefoon); nearest: 2026-09-09, 2026-10-09, 2026-11-09`,
+    );
+    expect(() =>
+      book(-20, { kind: "transfer", transfer: "Sparen", date: "2026-10-26" }),
+    ).toThrow(
+      'no transfer "Sparen" in the settings; there are "Naar vaste lasten"',
+    );
+    expect(() =>
+      book(-20, {
+        kind: "transfer",
+        transfer: "Naar vaste lasten",
+        date: "2026-10-25",
+      }),
+    ).toThrow("nearest: 2026-09-26, 2026-10-26");
+    expect(repository.listBookedLines()).toEqual([]);
+
+    expect(
+      book(20, { kind: "refund", expenseId: phone.id, date: "2026-10-09" }),
+    ).toEqual([null]);
+    expect(repository.listBookedLines()[0].plan).toEqual({
+      kind: "refund",
+      expenseId: phone.id,
+      date: "2026-10-09",
+    });
+
+    // Linked items can't go; deactivating is fine.
+    expect(() => repository.deleteExpense(phone.id)).toThrow(
+      "has booked lines linked",
+    );
+    repository.updateExpense(phone.id, { active: false });
+    expect(() =>
+      repository.replaceConfig({ ...repository.getConfig(), expenses: [] }),
+    ).toThrow("has booked lines linked");
+    repository.book(
+      [
+        {
+          lines: [{ key: "t", date: "2026-10-26", amount: -20 }],
+          plan: {
+            kind: "transfer",
+            transfer: "Naar vaste lasten",
+            date: "2026-10-26",
+          },
+        },
+      ],
+      today,
+    );
+    expect(() =>
+      repository.putSettings({
+        transfers: [{ name: "Anders", cycle: monthly(26), amount: 20 }],
+      }),
+    ).toThrow('Transfer "Naar vaste lasten" has booked lines linked');
+    repository.deleteBookedLine("t");
+    repository.putSettings({
+      transfers: [{ name: "Anders", cycle: monthly(26), amount: 20 }],
+    });
+  });
+
+  test("reconcile: linked lines replace their planned occurrence on both accounts", () => {
+    const salary = repository.createIncome({
+      name: "Salaris",
+      amount: 500,
+      cycle: monthly(20),
+      main: true,
+    });
+    const phone = repository.createExpense({
+      name: "Telefoon",
+      amount: 20,
+      cycle: monthly(15),
+      account: "current",
+    });
+    repository.putSettings({
+      transfers: [
+        { name: "Naar vaste lasten", cycle: monthly(21), amount: 20 },
+      ],
+    });
+    repository.createBalance(
+      { account: "current", amount: 100, date: "2026-10-01" },
+      today,
+    );
+    repository.createBalance(
+      { account: "fixed", amount: 50, date: "2026-10-01" },
+      today,
+    );
+    const line = (key: string, date: string, amount: number) => ({
+      key,
+      date,
+      amount,
+    });
+    repository.book(
+      [
+        {
+          lines: [line("s", "2026-10-21", 500)],
+          plan: { kind: "income", incomeId: salary.id, date: "2026-10-20" },
+        },
+        {
+          lines: [line("p1", "2026-10-15", -19.5)],
+          plan: { kind: "expense", expenseId: phone.id, date: "2026-10-15" },
+        },
+        {
+          lines: [line("r", "2026-10-14", 20)],
+          plan: { kind: "refund", expenseId: phone.id, date: "2026-10-14" },
+        },
+        { lines: [line("f", "2026-10-22", -5)], plan: { kind: "fixed" } },
+      ],
+      today,
+    );
+    // A second line to the same occurrence, in a separate booking.
+    repository.book(
+      [
+        {
+          lines: [line("p2", "2026-10-16", -0.3)],
+          plan: { kind: "expense", expenseId: phone.id, date: "2026-10-15" },
+        },
+      ],
+      today,
+    );
+    repository.createBalance(
+      { account: "current", amount: 560, date: "2026-10-23" },
+      today,
+    );
+
+    const current = repository.reconcile(
+      "current",
+      null,
+      parseDay("2026-10-01"),
+      today,
+      today,
+    );
+    const changes = current.checkpoints[1].changes;
+    expect(
+      changes.map((c) => [c.name, c.kind, c.amount, c.planned ?? false]),
+    ).toEqual([
+      ["Telefoon", "refund", 2000, false],
+      ["Telefoon", "expense", -1950, false],
+      ["Telefoon", "expense", -30, false],
+      ["Naar vaste lasten", "transfer", -2000, true],
+      ["Salaris", "income", 50000, false],
+      ["Vaste lastenrekening", "unplannedTransfer", -500, false],
+    ]);
+    expect(changes[1].plan).toEqual({
+      day: parseDay("2026-10-15"),
+      amount: -2000,
+      real: -1980,
+    });
+    expect(changes[4].plan).toEqual({
+      day: parseDay("2026-10-20"),
+      amount: 50000,
+      real: 50000,
+    });
+    // 100 + 20 - 19.80 + 500 - 20 - 5 = 575.20
+    expect(current.checkpoints[1].expected).toBe(57520);
+    expect(current.checkpoints[1].difference).toBe(56000 - 57520);
+
+    const fixed = repository.reconcile(
+      "fixed",
+      null,
+      parseDay("2026-10-01"),
+      today,
+      today,
+    );
+    expect(
+      fixed.since.map((c) => [c.kind, c.amount, c.planned ?? false]),
+    ).toEqual([
+      ["refund", -2000, false],
+      ["transfer", 2000, true],
+      ["unplannedTransfer", 500, false],
+    ]);
+    expect(fixed.expected).toBe(5000 - 2000 + 2000 + 500);
+  });
+
+  test("excluded categories: stored, editable, counted out of insights only", () => {
+    const lent = repository.createCategory({
+      name: "Voorgeschoten",
+      excluded: true,
+    });
+    expect(lent).toMatchObject({ name: "Voorgeschoten", excluded: true });
+    const food = repository
+      .listCategories()
+      .find((c) => c.name !== "Voorgeschoten")!;
+    expect(food.excluded).toBe(false);
+    expect(
+      repository.updateCategory(food.id, { excluded: true }),
+    ).toMatchObject({ name: food.name, excluded: true });
+    expect(
+      repository.updateCategory(food.id, {
+        name: "Boodschappen",
+        excluded: false,
+      }),
+    ).toEqual({ id: food.id, name: "Boodschappen", excluded: false });
+    expect(() => repository.updateCategory(999, { excluded: true })).toThrow(
+      "not found",
+    );
+
+    repository.createBalance(
+      { account: "current", amount: 100, date: "2026-10-01" },
+      today,
+    );
+    repository.createSpending(
+      {
+        date: "2026-10-02",
+        amount: 30,
+        description: "Concertkaartje",
+        categoryId: lent.id,
+      },
+      today,
+    );
+    repository.createSpending(
+      {
+        date: "2026-10-02",
+        amount: 10,
+        description: "Lunch",
+        categoryId: food.id,
+      },
+      today,
+    );
+    const spendings = repository.listSpendings();
+    expect(
+      counted(spendings, repository.listCategories()).map((s) => s.description),
+    ).toEqual(["Lunch"]);
+    // Balances keep them.
+    expect(
+      repository.reconcile(
+        "current",
+        null,
+        parseDay("2026-10-01"),
+        today,
+        today,
+      ).expected,
+    ).toBe(10000 - 4000);
   });
 
   test("missing records give 404", () => {
@@ -360,29 +765,69 @@ describe("repository", () => {
     expect(repository.createCounterparty({ name: "B", names: ["shop"] }).names).toEqual(["shop"]);
   });
 
-  test("bookings: lines become a spending or are skipped, once", () => {
-    const line = (key: string, amount: number) => ({ key, date: "2026-11-01", amount });
+  test("bookings: lines become a spending or a plan item, once; skipping is gone", () => {
+    const line = (key: string, amount: number) => ({
+      key,
+      date: "2026-11-01",
+      amount,
+    });
+    expect(() =>
+      repository.book(
+        [{ lines: [line("c", -30)], skip: "Vaste lasten" }],
+        today,
+      ),
+    ).toThrow("[0].skip: skipping is no longer possible");
     const [beer, gym] = repository.book(
       [
-        { lines: [line("a", -3.5), line("b", -2)], spending: { description: "Bier", amount: 5.5, date: "2026-10-31" } },
-        { lines: [line("c", -30)], skip: "Vaste lasten" },
+        {
+          lines: [line("a", -3.5), line("b", -2)],
+          spending: { description: "Bier", amount: 5.5, date: "2026-10-31" },
+        },
+        { lines: [line("c", -30)], plan: { kind: "fixed" } },
       ],
       today,
     );
     expect(beer).toMatchObject({ amount: 5.5, date: "2026-10-31" });
     expect(gym).toBeNull();
     expect(repository.listBookedLines({ from: "2026-11-01" })).toEqual([
-      { key: "a", date: "2026-11-01", amount: -3.5, spendingId: beer!.id, oneOffIncomeId: null, savingsTransferId: null, skip: null },
-      { key: "b", date: "2026-11-01", amount: -2, spendingId: beer!.id, oneOffIncomeId: null, savingsTransferId: null, skip: null },
-      { key: "c", date: "2026-11-01", amount: -30, spendingId: null, oneOffIncomeId: null, savingsTransferId: null, skip: "Vaste lasten" },
+      {
+        key: "a",
+        date: "2026-11-01",
+        amount: -3.5,
+        spendingId: beer!.id,
+        oneOffIncomeId: null,
+        savingsTransferId: null,
+        plan: null,
+        skip: null,
+      },
+      {
+        key: "b",
+        date: "2026-11-01",
+        amount: -2,
+        spendingId: beer!.id,
+        oneOffIncomeId: null,
+        savingsTransferId: null,
+        plan: null,
+        skip: null,
+      },
+      {
+        key: "c",
+        date: "2026-11-01",
+        amount: -30,
+        spendingId: null,
+        oneOffIncomeId: null,
+        savingsTransferId: null,
+        plan: { kind: "fixed" },
+        skip: null,
+      },
     ]);
 
     // All or nothing: one booked line rejects the whole batch.
     expect(() =>
       repository.book(
         [
-          { lines: [line("d", -1)], skip: "x" },
-          { lines: [line("a", -3.5)], skip: "x" },
+          { lines: [line("d", -1)], plan: { kind: "fixed" } },
+          { lines: [line("a", -3.5)], plan: { kind: "fixed" } },
         ],
         today,
       ),
@@ -392,7 +837,7 @@ describe("repository", () => {
     );
     expect(repository.listBookedLines().map((l) => l.key)).toEqual(["a", "b", "c"]);
 
-    // Deleting the spending frees its lines; a skip is undone directly.
+    // Deleting the spending frees its lines; a plan link is undone directly.
     expect(() => repository.deleteBookedLine("a")).toThrow("spending");
     repository.deleteSpending(beer!.id);
     repository.deleteBookedLine("c");
@@ -430,6 +875,7 @@ describe("repository", () => {
       spendingId: null,
       oneOffIncomeId: bike!.id,
       savingsTransferId: null,
+      plan: null,
       skip: null,
     });
 
@@ -437,8 +883,15 @@ describe("repository", () => {
     expect(() =>
       repository.book(
         [
-          { lines: [line("c", 1)], skip: "x" },
-          { lines: [line("d", 25)], income: { description: "Bijdrage boodschappen", amount: 25, counterpartyId: 99 } },
+          { lines: [line("c", 1)], plan: { kind: "fixed" } },
+          {
+            lines: [line("d", 25)],
+            income: {
+              description: "Bijdrage boodschappen",
+              amount: 25,
+              counterpartyId: 99,
+            },
+          },
         ],
         today,
       ),

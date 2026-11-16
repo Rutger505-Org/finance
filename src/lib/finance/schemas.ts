@@ -239,7 +239,12 @@ export const transferSchema = z.strictObject({ name, cycle: cycleSchema, amount:
 export type Transfer = z.infer<typeof transferSchema>;
 
 export const settingsSchema = z.strictObject({
-  transfers: z.array(transferSchema).min(1).max(10),
+  /** Names are unique: booked lines link a transfer by name. */
+  transfers: z
+    .array(transferSchema)
+    .min(1)
+    .max(10)
+    .superRefine((transfers, ctx) => uniqueValues(transfers.map((transfer) => transfer.name), ctx)),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
@@ -297,9 +302,19 @@ export type SavingsAccountDto = z.infer<typeof savingsAccountDto>;
 
 const optionalId = id.nullable();
 
-export const categoryCreate = z.strictObject({ name: z.string().trim().min(1).max(50) });
-export const categoryDto = z.strictObject({ id, ...categoryCreate.shape });
+const categoryFields = {
+  name: z.string().trim().min(1).max(50),
+  /** Its spendings don't count in spending insights, charts and totals; balances keep them. */
+  excluded: z.boolean(),
+};
+export const categoryCreate = z.strictObject({
+  ...categoryFields,
+  excluded: categoryFields.excluded.optional(),
+});
+export const categoryPatch = z.strictObject(categoryFields).partial();
+export const categoryDto = z.strictObject({ id, ...categoryFields });
 export type CategoryCreate = z.infer<typeof categoryCreate>;
+export type CategoryPatch = z.infer<typeof categoryPatch>;
 export type CategoryDto = z.infer<typeof categoryDto>;
 
 const outingFields = {
@@ -321,10 +336,10 @@ export type OutingDto = z.infer<typeof outingDto>;
 
 /**
  * What a counterparty's statement lines usually are: `spending` (always a spending, default category),
- * `income` (a one-off income: a second-hand buyer, family), `skip` (neither: fixed costs, own accounts,
- * regular income) or `ask` (depends on the line: Tikkies).
+ * `income` (a one-off income: a second-hand buyer, family), `plan` (plan items: regular income, fixed costs paid
+ * from the current account, transfers to and from the fixed-costs account) or `ask` (depends on the line: Tikkies).
  */
-export const counterpartyHandling = z.enum(["spending", "income", "skip", "ask"]);
+export const counterpartyHandling = z.enum(["spending", "income", "plan", "ask"]);
 export type CounterpartyHandling = z.infer<typeof counterpartyHandling>;
 
 /** Case-insensitive part of the name on a statement line ("albert heijn" matches "Albert Heijn 1178"). */
@@ -457,12 +472,46 @@ export const savingsBooking = z.strictObject({
 });
 export type SavingsBooking = z.infer<typeof savingsBooking>;
 
-/** One or more statement lines that become one spending, one-off income or savings transfer, or are skipped. */
+export const planLinkKind = z.enum(["income", "expense", "refund", "transfer", "fixed"]);
+export type PlanLinkKind = z.infer<typeof planLinkKind>;
+
+/**
+ * Lines that are a plan item, linked to one occurrence: an income or an expense paid from the current account
+ * (`date` = its due day), the refund of such an expense from the fixed-costs account (`date` = the refund day,
+ * the day before the due day), a transfer to the fixed-costs account from the settings, by name (`date` = its
+ * day), or `fixed`: money between the current and fixed-costs account outside the plan.
+ */
+export const planBooking = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("income"), incomeId: id, date: isoDate }),
+  z.strictObject({ kind: z.literal("expense"), expenseId: id, date: isoDate }),
+  z.strictObject({ kind: z.literal("refund"), expenseId: id, date: isoDate }),
+  z.strictObject({
+    kind: z.literal("transfer"),
+    transfer: name,
+    date: isoDate,
+  }),
+  z.strictObject({ kind: z.literal("fixed") }),
+]);
+export type PlanBooking = z.infer<typeof planBooking>;
+
+/** Old bookings could skip lines; new ones get a 400 that names the alternatives. */
+const skipBooking = z.string().max(200);
+
+const lines = z.array(bookedLineInput).min(1);
+/** One or more statement lines that become one spending, one-off income or savings transfer, or a plan item. */
 export const booking = z.union([
-  z.strictObject({ lines: z.array(bookedLineInput).min(1), spending: spendingCreate }),
-  z.strictObject({ lines: z.array(bookedLineInput).min(1), income: oneOffIncomeCreate }),
-  z.strictObject({ lines: z.array(bookedLineInput).min(1), savings: savingsBooking }),
-  z.strictObject({ lines: z.array(bookedLineInput).min(1), skip: z.string().trim().min(1).max(200) }),
+  z.strictObject({ lines, spending: spendingCreate }),
+  z.strictObject({ lines, income: oneOffIncomeCreate }),
+  z.strictObject({ lines, savings: savingsBooking }),
+  z.strictObject({ lines, plan: planBooking }),
+  z.strictObject({ lines, skip: skipBooking }),
+]);
+/** A booking item without `lines`, for rebooking. */
+const bookingTarget = z.union([
+  z.strictObject({ spending: spendingCreate }),
+  z.strictObject({ income: oneOffIncomeCreate }),
+  z.strictObject({ savings: savingsBooking }),
+  z.strictObject({ plan: planBooking }),
 ]);
 export const bookings = z
   .array(booking)
@@ -474,6 +523,18 @@ export const bookings = z
       ctx,
     ),
   );
+
+const lineKey = z.string().min(1).max(2000);
+/**
+ * Book already booked lines anew, atomically: their current booking is removed (its spending, one-off income or
+ * savings transfer deleted) and `booking` (a booking item without `lines`) is made from their key, date and amount.
+ */
+export const rebook = z.strictObject({
+  keys: z.array(lineKey).min(1).max(1000).superRefine(uniqueValues),
+  booking: bookingTarget,
+});
+export type Rebook = z.infer<typeof rebook>;
+
 export const bookedLineDto = z.strictObject({
   key: z.string(),
   date: isoDate,
@@ -481,17 +542,14 @@ export const bookedLineDto = z.strictObject({
   spendingId: id.nullable(),
   oneOffIncomeId: id.nullable(),
   savingsTransferId: id.nullable(),
+  plan: planBooking.nullable(),
+  /** Old bookings only. */
   skip: z.string().nullable(),
 });
-/** Turn a skipped line (an own-account transfer) into a savings transfer; `description` defaults to the skip reason. */
-export const convertToSavings = z.strictObject({
-  key: z.string().min(1).max(2000),
-  account: savingsAccountRef,
-  description: transferDescription.optional(),
-  note: note.optional(),
+export const bookedLineFilter = z.strictObject({
+  from: isoDate.optional(),
+  to: isoDate.optional(),
 });
-export type ConvertToSavings = z.infer<typeof convertToSavings>;
-export const bookedLineFilter = z.strictObject({ from: isoDate.optional(), to: isoDate.optional() });
 export type Booking = z.infer<typeof booking>;
 export type BookedLineDto = z.infer<typeof bookedLineDto>;
 export type BookedLineFilter = z.infer<typeof bookedLineFilter>;

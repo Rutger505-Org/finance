@@ -76,6 +76,8 @@ export interface Movement {
   name: string;
   amount: number;
   kind: MovementKind;
+  /** Income id (income) or expense id (charge, refund), when known. Transfers are known by name. */
+  itemId?: number;
 }
 
 export interface Overview {
@@ -190,9 +192,13 @@ export function movementsBetween(input: PlanInput, after: Day, until: Day): Move
   const transfers = resolveTransfers(input, after + 1).filter((transfer) => transfer.amount > 0);
   const movements: Movement[] = [
     ...input.incomes.flatMap((income) =>
-      occurrencesBetween(income.cycle, after, until).map(
-        (day): Movement => ({ day, name: income.name, amount: income.amount, kind: "income" }),
-      ),
+      occurrencesBetween(income.cycle, after, until).map((day): Movement => ({
+        day,
+        name: income.name,
+        amount: income.amount,
+        kind: "income",
+        itemId: income.id,
+      })),
     ),
     ...transfers.flatMap((transfer) =>
       occurrencesBetween(transfer.cycle, after, until).map(
@@ -200,14 +206,13 @@ export function movementsBetween(input: PlanInput, after: Day, until: Day): Move
       ),
     ),
     ...input.expenses.flatMap((expense) =>
-      outflowDays(expense, after, until).map(
-        (day): Movement => ({
-          day,
-          name: expense.name,
-          amount: expense.amount,
-          kind: expense.account === "fixed" ? "charge" : "refund",
-        }),
-      ),
+      outflowDays(expense, after, until).map((day): Movement => ({
+        day,
+        name: expense.name,
+        amount: expense.amount,
+        kind: expense.account === "fixed" ? "charge" : "refund",
+        itemId: expense.id,
+      })),
     ),
   ];
   const order: Record<MovementKind, number> = { income: 0, transfer: 1, charge: 2, refund: 3 };

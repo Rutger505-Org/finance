@@ -26,7 +26,25 @@ export function totalsBy(lines: SpendingLine[], key: "categoryId" | "outingId"):
   return [...totals.values()].sort((a, b) => b.amount - a.amount || (a.id ?? Infinity) - (b.id ?? Infinity));
 }
 
-export const sum = (lines: { amount: number }[]): number => lines.reduce((total, line) => total + line.amount, 0);
+/** Spendings in an excluded category don't count in insights, charts and totals (balances keep them). */
+export function counted<T extends { categoryId: number | null }>(
+  lines: T[],
+  categories: { id: number; excluded: boolean }[],
+): T[] {
+  const excluded = new Set(
+    categories
+      .filter((category) => category.excluded)
+      .map((category) => category.id),
+  );
+  return excluded.size
+    ? lines.filter(
+        (line) => line.categoryId === null || !excluded.has(line.categoryId),
+      )
+    : lines;
+}
+
+export const sum = (lines: { amount: number }[]): number =>
+  lines.reduce((total, line) => total + line.amount, 0);
 
 /** "2026-11" → first and last day, as YYYY-MM-DD. */
 export function monthRange(month: string): { from: string; to: string } {

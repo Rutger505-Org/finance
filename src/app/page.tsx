@@ -24,6 +24,7 @@ import {
 } from "@/lib/finance/insights";
 import { savingsBalance } from "@/lib/finance/savings";
 import { outingTotals, recurringOutings, trendStats } from "@/lib/finance/outing-trend";
+import { counted } from "@/lib/finance/spending";
 import { dateLong, money } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
 import type { Metadata } from "next";
@@ -41,9 +42,13 @@ const nameOf = (list: { id: number; name: string }[], none: string) => (id: numb
 export default function OverviewPage() {
   const today = getToday();
   const raw = repository.listSpendings();
-  const spendings = raw.map(toInsightSpending).filter((s) => s.day <= today);
+  const categories = repository.listCategories();
+  // Excluded categories don't count in the insights; outings keep every spending.
+  const spendings = counted(raw, categories)
+    .map(toInsightSpending)
+    .filter((s) => s.day <= today);
   const thisMonth = spendings.filter((s) => s.day >= startOfMonth(today));
-  const categoryName = nameOf(repository.listCategories(), "Geen categorie");
+  const categoryName = nameOf(categories, "Geen categorie");
   const counterpartyName = nameOf(repository.listCounterparties(), "Onbekend");
 
   return (

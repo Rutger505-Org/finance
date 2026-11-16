@@ -13,6 +13,7 @@ import { date, money } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { BalanceChart } from "./balance-chart";
+import { ChangeNote } from "./change-note";
 import type { AccountView } from "./types";
 
 const when = (iso: string, time: string | null) =>
@@ -104,6 +105,7 @@ export function SaldoView({ views }: { views: AccountView[] }) {
                       <li key={index} className="flex justify-between gap-4">
                         <span className="truncate">
                           {when(item.date, item.time)} · {item.name}
+                          <ChangeNote change={item} />
                         </span>
                         <span>{money(item.amount)}</span>
                       </li>

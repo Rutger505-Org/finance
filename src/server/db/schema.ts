@@ -1,4 +1,12 @@
-import type { Account, BalanceAccount, CounterpartyHandling, Cycle, SavingsWithdrawal, Settings } from "@/lib/finance/schemas";
+import type {
+  Account,
+  BalanceAccount,
+  CounterpartyHandling,
+  Cycle,
+  PlanLinkKind,
+  SavingsWithdrawal,
+  Settings,
+} from "@/lib/finance/schemas";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /** Amounts are cents. Cycles are JSON, validated by `cycleSchema` on the way in. */
@@ -123,6 +131,8 @@ export const settings = sqliteTable("settings", {
 export const category = sqliteTable("category", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull().unique(),
+  /** Its spendings don't count in spending insights and totals; balances keep them. */
+  excluded: integer("excluded", { mode: "boolean" }).notNull().default(false),
   ...timestamps,
 });
 
@@ -208,7 +218,10 @@ export const oneOffIncome = sqliteTable(
   (table) => [index("one_off_income_date_idx").on(table.date)],
 );
 
-/** A statement line that has been booked: as (part of) a spending, one-off income or savings transfer, or skipped. Lines themselves aren't stored. */
+/**
+ * A statement line that has been booked: as (part of) a spending, one-off income or savings transfer, linked to a
+ * plan occurrence, or skipped (old data only). Exactly one of those per line. Lines themselves aren't stored.
+ */
 export const bookedLine = sqliteTable(
   "booked_line",
   {
@@ -218,10 +231,28 @@ export const bookedLine = sqliteTable(
     date: text("date").notNull(),
     /** Bank sign: negative is money out. */
     amount: integer("amount").notNull(),
-    spendingId: integer("spending_id").references(() => spending.id, { onDelete: "cascade" }),
-    oneOffIncomeId: integer("one_off_income_id").references(() => oneOffIncome.id, { onDelete: "cascade" }),
-    savingsTransferId: integer("savings_transfer_id").references(() => savingsTransfer.id, { onDelete: "cascade" }),
-    /** Why it is neither (fixed cost, own account, regular income). */
+    spendingId: integer("spending_id").references(() => spending.id, {
+      onDelete: "cascade",
+    }),
+    oneOffIncomeId: integer("one_off_income_id").references(
+      () => oneOffIncome.id,
+      { onDelete: "cascade" },
+    ),
+    savingsTransferId: integer("savings_transfer_id").references(
+      () => savingsTransfer.id,
+      { onDelete: "cascade" },
+    ),
+    /**
+     * Linked to a plan occurrence (see `planLink`): `planIncomeId` for income, `planExpenseId` for expense and
+     * refund, `planTransfer` (name in settings) for transfer, each with `planDate`; fixed has none of them.
+     */
+    planKind: text("plan_kind").$type<PlanLinkKind>(),
+    planIncomeId: integer("plan_income_id"),
+    planExpenseId: integer("plan_expense_id"),
+    planTransfer: text("plan_transfer"),
+    /** YYYY-MM-DD: the planned day of the occurrence (refund: the planned refund day). */
+    planDate: text("plan_date"),
+    /** Old bookings only: why it was neither. New bookings can't skip. */
     skipReason: text("skip_reason"),
     createdAt: timestamps.createdAt,
   },
@@ -230,5 +261,6 @@ export const bookedLine = sqliteTable(
     index("booked_line_spending_idx").on(table.spendingId),
     index("booked_line_one_off_income_idx").on(table.oneOffIncomeId),
     index("booked_line_savings_transfer_idx").on(table.savingsTransferId),
+    index("booked_line_plan_idx").on(table.planKind),
   ],
 );

@@ -1,6 +1,14 @@
 import { isoDay, type Day } from "@/lib/finance/dates";
-import { planChanges, reconcile, type Change, type Reconciliation } from "@/lib/finance/balances";
-import { buildOverview, resolveTransfers, type Overview, type PlanInput, type TransferLine } from "@/lib/finance/plan";
+import { planChanges, reconcile, type Change, type PlanLine, type Reconciliation } from "@/lib/finance/balances";
+import {
+  buildOverview,
+  outflowDays,
+  resolveTransfers,
+  type Overview,
+  type PlanInput,
+  type TransferLine,
+} from "@/lib/finance/plan";
+import { occurrencesBetween } from "@/lib/finance/schedule";
 import {
   defaultSettings,
   linkedIncomeIds,
@@ -8,12 +16,12 @@ import {
   type BalanceAccount,
   type BalanceCreate,
   type BookedLineDto,
-  type ConvertToSavings,
   type BookedLineFilter,
   type Booking,
   type BalanceDto,
   type CategoryCreate,
   type CategoryDto,
+  type CategoryPatch,
   type Config,
   type CounterpartyCreate,
   type CounterpartyDto,
@@ -31,6 +39,8 @@ import {
   type OutingCreate,
   type OutingDto,
   type OutingPatch,
+  type PlanBooking,
+  type Rebook,
   type SavingsAccountCreate,
   type SavingsAccountDto,
   type SavingsAccountPatch,
@@ -51,7 +61,7 @@ import { parseDay } from "@/lib/finance/dates";
 import { inScenario } from "@/lib/finance/savings";
 import { HttpError } from "@/server/http-error";
 import * as schema from "@/server/db/schema";
-import { and, asc, desc, eq, gte, inArray, lte, ne, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, lte, ne, notInArray, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 
 const {
@@ -174,6 +184,38 @@ function counterpartyDto(row: CounterpartyRow, aliases: AliasRow[]): Counterpart
   };
 }
 
+/** The plan link stored on a booked line, null when it has none. */
+function planOf(row: BookedLineRow): PlanBooking | null {
+  const date = row.planDate ?? "";
+  switch (row.planKind) {
+    case null:
+      return null;
+    case "income":
+      return { kind: "income", incomeId: row.planIncomeId!, date };
+    case "expense":
+    case "refund":
+      return { kind: row.planKind, expenseId: row.planExpenseId!, date };
+    case "transfer":
+      return { kind: "transfer", transfer: row.planTransfer!, date };
+    case "fixed":
+      return { kind: "fixed" };
+  }
+}
+
+/** Columns of a booked line for a plan link. */
+function planColumns(plan: PlanBooking | null) {
+  return {
+    planKind: plan?.kind ?? null,
+    planIncomeId: plan?.kind === "income" ? plan.incomeId : null,
+    planExpenseId:
+      plan?.kind === "expense" || plan?.kind === "refund"
+        ? plan.expenseId
+        : null,
+    planTransfer: plan?.kind === "transfer" ? plan.transfer : null,
+    planDate: plan && plan.kind !== "fixed" ? plan.date : null,
+  };
+}
+
 function bookedLineDto(row: BookedLineRow): BookedLineDto {
   return {
     key: row.key,
@@ -182,9 +224,17 @@ function bookedLineDto(row: BookedLineRow): BookedLineDto {
     spendingId: row.spendingId,
     oneOffIncomeId: row.oneOffIncomeId,
     savingsTransferId: row.savingsTransferId,
+    plan: planOf(row),
     skip: row.skipReason,
   };
 }
+
+type CategoryRow = typeof category.$inferSelect;
+const categoryDto = (row: CategoryRow): CategoryDto => ({
+  id: row.id,
+  name: row.name,
+  excluded: row.excluded,
+});
 
 function spendingDto(row: SpendingRow): SpendingDto {
   return {
@@ -517,28 +567,379 @@ export function createRepository(db: Db) {
     return row ? spendingDto(row) : notFound("Spending", id);
   }
 
+  /** "does not exist" or why it isn't in the plan. */
+  function notInPlan(
+    table: typeof income | typeof expense,
+    kind: string,
+    id: number,
+  ): string {
+    const row = db
+      .select({ id: table.id, active: table.active })
+      .from(table)
+      .where(eq(table.id, id))
+      .get();
+    if (!row) return `${kind} ${id} does not exist`;
+    return row.active
+      ? `${kind} ${id} is not in the real scenario`
+      : `${kind} ${id} is inactive`;
+  }
+
+  /**
+   * A plan link must point at an active item of the real scenario and at a real occurrence of it (the error lists
+   * the nearest ones). Incomes and refunds are money in, expenses and transfers money out.
+   */
+  function assertPlan(
+    plan: PlanBooking,
+    lines: { amount: number }[],
+    path: string,
+    input: PlanInput,
+  ) {
+    if (plan.kind === "fixed") return;
+    const day = parseDay(plan.date);
+    let label: string;
+    let occurrences: (after: Day, until: Day) => Day[];
+    let moneyIn: boolean;
+    switch (plan.kind) {
+      case "income": {
+        const item = input.incomes.find((row) => row.id === plan.incomeId);
+        if (!item)
+          throw new HttpError(
+            400,
+            `${path}.incomeId: ${notInPlan(income, "income", plan.incomeId)}`,
+          );
+        label = `a day of income ${plan.incomeId} (${item.name})`;
+        occurrences = (after, until) =>
+          occurrencesBetween(item.cycle, after, until);
+        moneyIn = true;
+        break;
+      }
+      case "expense":
+      case "refund": {
+        const item = input.expenses.find((row) => row.id === plan.expenseId);
+        if (!item)
+          throw new HttpError(
+            400,
+            `${path}.expenseId: ${notInPlan(expense, "expense", plan.expenseId)}`,
+          );
+        if (item.account !== "current") {
+          throw new HttpError(
+            400,
+            `${path}.expenseId: expense ${plan.expenseId} (${item.name}) is charged to the fixed-costs account, not the current account`,
+          );
+        }
+        if (plan.kind === "expense") {
+          label = `a due day of expense ${plan.expenseId} (${item.name})`;
+          occurrences = (after, until) =>
+            occurrencesBetween(item.cycle, after, until);
+          moneyIn = false;
+        } else {
+          label = `a refund day (the day before a due day) of expense ${plan.expenseId} (${item.name})`;
+          occurrences = (after, until) => outflowDays(item, after, until);
+          moneyIn = true;
+        }
+        break;
+      }
+      case "transfer": {
+        const item = input.transfers.find((row) => row.name === plan.transfer);
+        if (!item) {
+          const names = input.transfers
+            .map((row) => `"${row.name}"`)
+            .join(", ");
+          throw new HttpError(
+            400,
+            `${path}.transfer: no transfer "${plan.transfer}" in the settings; there are ${names}`,
+          );
+        }
+        label = `a day of transfer "${item.name}"`;
+        occurrences = (after, until) =>
+          occurrencesBetween(item.cycle, after, until);
+        moneyIn = false;
+        break;
+      }
+    }
+    const around = occurrences(day - 400, day + 400);
+    if (!around.includes(day)) {
+      const nearest = [...around]
+        .sort((a, b) => Math.abs(a - day) - Math.abs(b - day) || a - b)
+        .slice(0, 3)
+        .sort((a, b) => a - b);
+      throw new HttpError(
+        400,
+        `${path}.date: ${plan.date} is not ${label}; nearest: ${nearest.map(isoDay).join(", ") || "none"}`,
+      );
+    }
+    lines.forEach((line, index) => {
+      if (moneyIn ? line.amount > 0 : line.amount < 0) return;
+      throw new HttpError(
+        400,
+        `lines[${index}].amount: ${line.amount} doesn't fit ${plan.kind}, which is money ${moneyIn ? "in (positive)" : "out (negative)"}`,
+      );
+    });
+  }
+
+  type BookingLine = Booking["lines"][number];
+  /** A booking item, validated and resolved, ready to insert. */
+  type Prepared = {
+    lines: BookingLine[];
+    spending?: SpendingCreate;
+    income?: OneOffIncomeCreate;
+    savings?: SavingsTransferCreate;
+    plan?: PlanBooking;
+  };
+
+  const skipGone =
+    "skipping is no longer possible: book the lines as a spending, income (one-off income), savings (savings transfer) or plan (income, expense, refund, transfer or fixed)";
+
+  /** Validates a booking item; errors start with `path`. */
+  function prepareBooking(
+    item: Booking,
+    path: string,
+    input: () => PlanInput,
+  ): Prepared {
+    const prefixed = (field: string, check: () => void) => {
+      try {
+        check();
+      } catch (error) {
+        if (error instanceof HttpError)
+          throw new HttpError(error.status, `${path}.${field}${error.message}`);
+        throw error;
+      }
+    };
+    if ("skip" in item) throw new HttpError(400, `${path}.skip: ${skipGone}`);
+    if ("spending" in item) {
+      prefixed("spending.", () => assertRefs(item.spending));
+      return { lines: item.lines, spending: item.spending };
+    }
+    if ("income" in item) {
+      prefixed("income.", () => assertRefs(item.income));
+      return { lines: item.lines, income: item.income };
+    }
+    if ("plan" in item) {
+      prefixed("", () => assertPlan(item.plan, item.lines, "plan", input()));
+      return { lines: item.lines, plan: item.plan };
+    }
+    const { account, amount, date, ...rest } = item.savings;
+    const total = item.lines.reduce(
+      (sum, line) => sum + toCents(line.amount),
+      0,
+    );
+    if (amount === undefined && total === 0) {
+      throw new HttpError(
+        400,
+        `${path}.savings.amount: the lines add up to 0; give an amount`,
+      );
+    }
+    return {
+      lines: item.lines,
+      savings: {
+        ...rest,
+        savingsAccountId: resolveSavingsAccount(
+          account,
+          `${path}.savings.account`,
+        ).id,
+        date: date ?? item.lines[0].date,
+        amount: amount ?? toEuros(total),
+      },
+    };
+  }
+
+  function insertBooking(
+    tx: Tx,
+    item: Prepared,
+    today: Day,
+  ): SpendingDto | OneOffIncomeDto | SavingsTransferDto | null {
+    const spent = item.spending
+      ? insertSpending(tx, item.spending, today)
+      : null;
+    const received = item.income
+      ? insertOneOffIncome(tx, item.income, today)
+      : null;
+    const transfer = item.savings
+      ? insertSavingsTransfer(tx, item.savings, today)
+      : null;
+    for (const line of item.lines) {
+      tx.insert(bookedLine)
+        .values({
+          key: line.key,
+          date: line.date,
+          amount: toCents(line.amount),
+          spendingId: spent?.id ?? null,
+          oneOffIncomeId: received?.id ?? null,
+          savingsTransferId: transfer?.id ?? null,
+          ...planColumns(item.plan ?? null),
+          skipReason: null,
+        })
+        .run();
+    }
+    return spent ?? received ?? transfer;
+  }
+
+  /** Every booked line linked to the plan, named after its item, for reconciling. */
+  function planLines(account: "current" | "fixed"): PlanLine[] {
+    const incomeNames = new Map(
+      db
+        .select({ id: income.id, name: income.name })
+        .from(income)
+        .all()
+        .map((r) => [r.id, r.name]),
+    );
+    const expenseNames = new Map(
+      db
+        .select({ id: expense.id, name: expense.name })
+        .from(expense)
+        .all()
+        .map((r) => [r.id, r.name]),
+    );
+    return db
+      .select()
+      .from(bookedLine)
+      .where(isNotNull(bookedLine.planKind))
+      .all()
+      .map((row): PlanLine => {
+        const plan = planOf(row)!;
+        const base = { day: parseDay(row.date), amount: row.amount };
+        switch (plan.kind) {
+          case "income":
+            return {
+              ...base,
+              name:
+                incomeNames.get(plan.incomeId) ?? `Inkomen ${plan.incomeId}`,
+              link: {
+                kind: "income",
+                incomeId: plan.incomeId,
+                day: parseDay(plan.date),
+              },
+            };
+          case "expense":
+          case "refund":
+            return {
+              ...base,
+              name:
+                expenseNames.get(plan.expenseId) ??
+                `Vaste last ${plan.expenseId}`,
+              link: {
+                kind: plan.kind,
+                expenseId: plan.expenseId,
+                day: parseDay(plan.date),
+              },
+            };
+          case "transfer":
+            return {
+              ...base,
+              name: plan.transfer,
+              link: {
+                kind: "transfer",
+                transfer: plan.transfer,
+                day: parseDay(plan.date),
+              },
+            };
+          case "fixed":
+            return {
+              ...base,
+              name:
+                account === "current"
+                  ? "Vaste lastenrekening"
+                  : "Lopende rekening",
+              link: { kind: "fixed" },
+            };
+        }
+      });
+  }
+
+  /** Lazily, once: the real scenario's plan, for validating plan links. */
+  function lazyPlanInput(): () => PlanInput {
+    let cached: PlanInput | undefined;
+    return () => (cached ??= planInput());
+  }
+
+  /** Items with booked lines linked to them can't go: their lines would lose their meaning. */
+  function assertNotLinked(
+    target: Db | Tx,
+    incomeIds: number[],
+    expenseIds: number[],
+    transfers: string[],
+  ) {
+    const linked = (
+      column:
+        | typeof bookedLine.planIncomeId
+        | typeof bookedLine.planExpenseId
+        | typeof bookedLine.planTransfer,
+      values: (number | string)[],
+    ) =>
+      values.length
+        ? target
+            .select({ value: column, key: bookedLine.key })
+            .from(bookedLine)
+            .where(inArray(column, values))
+            .all()
+        : [];
+    const income = linked(bookedLine.planIncomeId, incomeIds)[0];
+    if (income) {
+      throw new HttpError(
+        409,
+        `Income ${income.value} has booked lines linked to it; deactivate it instead or rebook ${income.key}`,
+      );
+    }
+    const expenseLine = linked(bookedLine.planExpenseId, expenseIds)[0];
+    if (expenseLine) {
+      throw new HttpError(
+        409,
+        `Expense ${expenseLine.value} has booked lines linked to it; deactivate it instead or rebook ${expenseLine.key}`,
+      );
+    }
+    const transfer = linked(bookedLine.planTransfer, transfers)[0];
+    if (transfer) {
+      throw new HttpError(
+        409,
+        `Transfer "${transfer.value}" has booked lines linked to it by name; keep the name or rebook ${transfer.key}`,
+      );
+    }
+  }
+
+  /** Transfers in the settings now that `next` no longer has. */
+  const droppedTransfers = (next: Settings) =>
+    getSettings()
+      .transfers.map((transfer) => transfer.name)
+      .filter(
+        (name) => !next.transfers.some((transfer) => transfer.name === name),
+      );
+
   return {
     listCategories(): CategoryDto[] {
       return db
-        .select({ id: category.id, name: category.name })
+        .select()
         .from(category)
         .orderBy(sql`${category.name} collate nocase`)
-        .all();
+        .all()
+        .map(categoryDto);
     },
     createCategory(input: CategoryCreate): CategoryDto {
       try {
-        const row = db.insert(category).values({ name: input.name }).returning().get();
-        return { id: row.id, name: row.name };
+        const row = db
+          .insert(category)
+          .values({ name: input.name, excluded: input.excluded ?? false })
+          .returning()
+          .get();
+        return categoryDto(row);
       } catch (error) {
         conflict(error, `Category "${input.name}" already exists`);
       }
     },
-    renameCategory(id: number, input: CategoryCreate): CategoryDto {
+    updateCategory(id: number, patch: CategoryPatch): CategoryDto {
+      if (patch.name === undefined && patch.excluded === undefined) {
+        const row = db.select().from(category).where(eq(category.id, id)).get();
+        return row ? categoryDto(row) : notFound("Category", id);
+      }
       try {
-        const row = db.update(category).set({ name: input.name }).where(eq(category.id, id)).returning().get();
-        return row ? { id: row.id, name: row.name } : notFound("Category", id);
+        const row = db
+          .update(category)
+          .set(patch)
+          .where(eq(category.id, id))
+          .returning()
+          .get();
+        return row ? categoryDto(row) : notFound("Category", id);
       } catch (error) {
-        conflict(error, `Category "${input.name}" already exists`);
+        conflict(error, `Category "${patch.name}" already exists`);
       }
     },
     /** Spendings and counterparties keep existing, without category. */
@@ -731,92 +1132,103 @@ export function createRepository(db: Db) {
     },
     /**
      * All or nothing: an already booked line is a 409 and nothing is saved. Returns the created spending,
-     * one-off income or savings transfer per booking (null when skipped).
+     * one-off income or savings transfer per booking (null for a plan item).
      */
-    book(bookings: Booking[], today: Day): (SpendingDto | OneOffIncomeDto | SavingsTransferDto | null)[] {
-      const keys = bookings.flatMap((item) => item.lines.map((line) => line.key));
-      const booked = db.select({ key: bookedLine.key }).from(bookedLine).where(inArray(bookedLine.key, keys)).all();
+    book(
+      items: Booking[],
+      today: Day,
+    ): (SpendingDto | OneOffIncomeDto | SavingsTransferDto | null)[] {
+      const keys = items.flatMap((item) => item.lines.map((line) => line.key));
+      const booked = db
+        .select({ key: bookedLine.key })
+        .from(bookedLine)
+        .where(inArray(bookedLine.key, keys))
+        .all();
       if (booked.length > 0) {
         throw new HttpError(409, `Al geboekt: ${booked.map((row) => row.key).join("; ")}`);
       }
-      const transfers = bookings.map((item, index): SavingsTransferCreate | null => {
-        if (!("savings" in item)) return null;
-        const { account, amount, date, ...rest } = item.savings;
-        const total = item.lines.reduce((sum, line) => sum + toCents(line.amount), 0);
-        if (amount === undefined && total === 0) {
-          throw new HttpError(400, `[${index}].savings.amount: the lines add up to 0; give an amount`);
-        }
-        return {
-          ...rest,
-          savingsAccountId: resolveSavingsAccount(account, `[${index}].savings.account`).id,
-          date: date ?? item.lines[0].date,
-          amount: amount ?? toEuros(total),
-        };
-      });
-      bookings.forEach((item, index) => {
-        const [field, refs] =
-          "spending" in item ? ["spending", item.spending] : "income" in item ? ["income", item.income] : [];
-        if (!refs) return;
-        try {
-          assertRefs(refs);
-        } catch (error) {
-          if (error instanceof HttpError) throw new HttpError(error.status, `[${index}].${field}.${error.message}`);
-          throw error;
-        }
-      });
+      const input = lazyPlanInput();
+      const prepared = items.map((item, index) =>
+        prepareBooking(item, `[${index}]`, input),
+      );
       return db.transaction((tx) =>
-        bookings.map((item, index) => {
-          const spent = "spending" in item ? insertSpending(tx, item.spending, today) : null;
-          const received = "income" in item ? insertOneOffIncome(tx, item.income, today) : null;
-          const transfer = transfers[index] ? insertSavingsTransfer(tx, transfers[index], today) : null;
-          for (const line of item.lines) {
-            tx.insert(bookedLine)
-              .values({
-                key: line.key,
-                date: line.date,
-                amount: toCents(line.amount),
-                spendingId: spent?.id ?? null,
-                oneOffIncomeId: received?.id ?? null,
-                savingsTransferId: transfer?.id ?? null,
-                skipReason: "skip" in item ? item.skip : null,
-              })
-              .run();
-          }
-          return spent ?? received ?? transfer;
-        }),
+        prepared.map((item) => insertBooking(tx, item, today)),
       );
     },
     /**
-     * A skipped line (an own-account transfer, booked before savings transfers existed) becomes a savings
-     * transfer with its date and amount, without un-booking it: the skip reason is cleared and the line links
-     * the transfer, so deleting the transfer frees the line like any other booking.
+     * Book lines anew, atomically: their current booking goes (its spending, one-off income or savings transfer
+     * is deleted; 400 when another line not in `keys` belongs to it too) and `booking` is made from the lines'
+     * saved key, date and amount, in the order of `keys`.
      */
-    convertToSavings(input: ConvertToSavings): SavingsTransferDto {
-      const row = db.select().from(bookedLine).where(eq(bookedLine.key, input.key)).get();
-      if (!row) throw new HttpError(404, "Line not booked");
-      if (row.skipReason === null || row.spendingId !== null || row.oneOffIncomeId !== null || row.savingsTransferId !== null) {
-        throw new HttpError(409, "Only a skipped line can be converted");
-      }
-      if (row.amount === 0) throw new HttpError(409, "Line amount is 0");
-      const account = resolveSavingsAccount(input.account);
+    rebook(
+      input: Rebook,
+      today: Day,
+    ): SpendingDto | OneOffIncomeDto | SavingsTransferDto | null {
       return db.transaction((tx) => {
-        const transfer = tx
-          .insert(savingsTransfer)
-          .values({
-            savingsAccountId: account.id,
-            date: row.date,
-            time: null,
-            amount: row.amount,
-            description: input.description ?? row.skipReason!,
-            note: input.note ?? null,
-          })
-          .returning()
-          .get();
-        tx.update(bookedLine).set({ skipReason: null, savingsTransferId: transfer.id }).where(eq(bookedLine.key, row.key)).run();
-        return savingsTransferDto(transfer);
+        const rows = tx
+          .select()
+          .from(bookedLine)
+          .where(inArray(bookedLine.key, input.keys))
+          .all();
+        const byKey = new Map(rows.map((row) => [row.key, row]));
+        const missing = input.keys.filter((key) => !byKey.has(key));
+        if (missing.length)
+          throw new HttpError(400, `keys: not booked: ${missing.join("; ")}`);
+        const owners = [
+          { field: "spendingId", table: spending, label: "spending" },
+          {
+            field: "oneOffIncomeId",
+            table: oneOffIncome,
+            label: "one-off income",
+          },
+          {
+            field: "savingsTransferId",
+            table: savingsTransfer,
+            label: "savings transfer",
+          },
+        ] as const;
+        for (const { field, table, label } of owners) {
+          const column = bookedLine[field];
+          const ids = [...new Set(rows.flatMap((row) => row[field] ?? []))];
+          if (!ids.length) continue;
+          const other = tx
+            .select({ key: bookedLine.key, id: column })
+            .from(bookedLine)
+            .where(
+              and(inArray(column, ids), notInArray(bookedLine.key, input.keys)),
+            )
+            .get();
+          if (other) {
+            throw new HttpError(
+              400,
+              `keys: line ${other.key} also belongs to ${label} ${other.id}; add its key too`,
+            );
+          }
+          tx.delete(bookedLine).where(inArray(column, ids)).run();
+          tx.delete(table).where(inArray(table.id, ids)).run();
+        }
+        tx.delete(bookedLine).where(inArray(bookedLine.key, input.keys)).run();
+        const lines = input.keys.map((key) => {
+          const row = byKey.get(key)!;
+          return { key, date: row.date, amount: toEuros(row.amount) };
+        });
+        const item = prepareBooking(
+          { ...input.booking, lines },
+          "booking",
+          lazyPlanInput(),
+        );
+        return insertBooking(tx, item, today);
       });
     },
-    /** Un-skip a line; booked lines of a spending or one-off income go with it. */
+    /** Skipped lines (old bookings): they count nowhere. */
+    countSkippedLines(): number {
+      return db
+        .select({ count: sql<number>`count(*)` })
+        .from(bookedLine)
+        .where(isNotNull(bookedLine.skipReason))
+        .get()!.count;
+    },
+    /** Unbook a skipped or plan-linked line; lines of a spending, one-off income or savings transfer go with it. */
     deleteBookedLine(key: string): void {
       const row = db.select().from(bookedLine).where(eq(bookedLine.key, key)).get();
       if (!row) throw new HttpError(404, "Line not booked");
@@ -864,6 +1276,7 @@ export function createRepository(db: Db) {
       if (linkedIncomeIds(getSettings()).includes(id)) {
         throw new HttpError(409, `Income ${id} is linked to a transfer; change that transfer first`);
       }
+      assertNotLinked(db, [id], [], []);
       const row = db.delete(income).where(eq(income.id, id)).returning().get();
       if (!row) notFound("Income", id);
     },
@@ -893,7 +1306,12 @@ export function createRepository(db: Db) {
       return row ? expenseDto(row) : notFound("Expense", id);
     },
     deleteExpense(id: number): void {
-      const row = db.delete(expense).where(eq(expense.id, id)).returning().get();
+      assertNotLinked(db, [], [id], []);
+      const row = db
+        .delete(expense)
+        .where(eq(expense.id, id))
+        .returning()
+        .get();
       if (!row) notFound("Expense", id);
     },
 
@@ -1059,7 +1477,17 @@ export function createRepository(db: Db) {
 
     getSettings,
     putSettings(value: Settings): Settings {
-      checkLinkedIncomes(value, new Set(db.select({ id: income.id }).from(income).all().map((r) => r.id)));
+      checkLinkedIncomes(
+        value,
+        new Set(
+          db
+            .select({ id: income.id })
+            .from(income)
+            .all()
+            .map((r) => r.id),
+        ),
+      );
+      assertNotLinked(db, [], [], droppedTransfers(value));
       db.insert(settings)
         .values({ id: 1, transfers: value.transfers })
         .onConflictDoUpdate({ target: settings.id, set: { transfers: value.transfers } })
@@ -1158,7 +1586,13 @@ export function createRepository(db: Db) {
           });
         }
       } else {
-        changes = planChanges(planInput(), account, after, until);
+        changes = planChanges(
+          planInput(),
+          account,
+          after,
+          until,
+          planLines(account),
+        );
         if (account === "current") {
           const rows = db
             .select()
@@ -1217,8 +1651,24 @@ export function createRepository(db: Db) {
 
         const keepIncomes = config.incomes.flatMap((item) => item.id ?? []);
         const keepExpenses = config.expenses.flatMap((item) => item.id ?? []);
-        tx.delete(income).where(keepIncomes.length ? notInArray(income.id, keepIncomes) : undefined).run();
-        tx.delete(expense).where(keepExpenses.length ? notInArray(expense.id, keepExpenses) : undefined).run();
+        assertNotLinked(
+          tx,
+          [...knownIncomes].filter((id) => !keepIncomes.includes(id)),
+          [...knownExpenses].filter((id) => !keepExpenses.includes(id)),
+          droppedTransfers(config.settings),
+        );
+        tx.delete(income)
+          .where(
+            keepIncomes.length ? notInArray(income.id, keepIncomes) : undefined,
+          )
+          .run();
+        tx.delete(expense)
+          .where(
+            keepExpenses.length
+              ? notInArray(expense.id, keepExpenses)
+              : undefined,
+          )
+          .run();
 
         for (const { id, ...item } of config.incomes) {
           const values = {

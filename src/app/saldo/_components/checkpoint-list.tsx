@@ -8,6 +8,8 @@ import { parseDay } from "@/lib/finance/dates";
 import { date, money } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useState, useTransition } from "react";
+import { ChangeNote } from "./change-note";
+import type { ChangeItem } from "./types";
 
 interface Row {
   id: number;
@@ -17,6 +19,43 @@ interface Row {
   amount: number;
   expected: number | null;
   difference: number | null;
+  /** Since the checkpoint before; only filled when it's off. */
+  changes: ChangeItem[];
+}
+
+/** What happened between the checkpoint before and this one, to find what's missing or wrong. */
+function Changes({ changes }: { changes: ChangeItem[] }) {
+  const unlinked = changes.filter((change) => change.planned).length;
+  return (
+    <details className="group w-full">
+      <summary className="text-muted-foreground cursor-pointer list-none text-xs">
+        <span className="mr-1 inline-block transition-transform group-open:rotate-90">
+          ›
+        </span>
+        {changes.length} {changes.length === 1 ? "wijziging" : "wijzigingen"}{" "}
+        sinds het checkpoint ervoor
+        {unlinked > 0 && (
+          <span className="text-amber-700">
+            {" "}
+            · {unlinked} gepland zonder bankregel
+          </span>
+        )}
+      </summary>
+      <ul className="mt-1 mb-1 space-y-0.5 pl-4 text-xs">
+        {changes.map((change, index) => (
+          <li key={index} className="flex justify-between gap-4">
+            <span className="min-w-0">
+              {date(parseDay(change.date))}
+              {change.time && ` ${change.time}`} · {change.name}
+              <span className="text-muted-foreground"> · {change.label}</span>
+              <ChangeNote change={change} />
+            </span>
+            <span className="shrink-0">{money(change.amount)}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 export function CheckpointList({ rows }: { rows: Row[] }) {
@@ -92,6 +131,7 @@ export function CheckpointList({ rows }: { rows: Row[] }) {
                 Weg
               </Button>
             </div>
+            {row.changes.length > 0 && <Changes changes={row.changes} />}
           </li>
         ))}
       </ul>

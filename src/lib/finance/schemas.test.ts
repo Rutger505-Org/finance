@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { bookings, configSchema, cycleSchema, euros, formatIssues, oneOffIncomeCreate } from "./schemas";
+import {
+  bookings,
+  categoryPatch,
+  configSchema,
+  cycleSchema,
+  euros,
+  formatIssues,
+  oneOffIncomeCreate,
+  rebook,
+  settingsSchema,
+} from "./schemas";
 
 describe("schemas", () => {
   test("amounts allow at most 2 decimals", () => {
@@ -64,5 +74,58 @@ describe("schemas", () => {
     const income = { description: "Bijdrage boodschappen", amount: 25 };
     expect(bookings.safeParse([{ lines: [line], income }]).success).toBe(true);
     expect(bookings.safeParse([{ lines: [line], income, skip: "x" }]).success).toBe(false);
+  });
+
+  test("plan bookings, rebook without lines, unique transfer names, category excluded", () => {
+    const line = { key: "k", date: "2026-11-02", amount: -20 };
+    expect(
+      bookings.safeParse([
+        {
+          lines: [line],
+          plan: { kind: "expense", expenseId: 1, date: "2026-11-02" },
+        },
+      ]).success,
+    ).toBe(true);
+    expect(
+      bookings.safeParse([{ lines: [line], plan: { kind: "fixed" } }]).success,
+    ).toBe(true);
+    expect(
+      bookings.safeParse([
+        { lines: [line], plan: { kind: "fixed", date: "2026-11-02" } },
+      ]).success,
+    ).toBe(false);
+    expect(
+      bookings.safeParse([
+        { lines: [line], plan: { kind: "transfer", date: "2026-11-02" } },
+      ]).success,
+    ).toBe(false);
+    expect(
+      rebook.safeParse({ keys: ["k"], booking: { plan: { kind: "fixed" } } })
+        .success,
+    ).toBe(true);
+    expect(
+      rebook.safeParse({
+        keys: ["k"],
+        booking: { lines: [line], plan: { kind: "fixed" } },
+      }).success,
+    ).toBe(false);
+    expect(
+      rebook.safeParse({
+        keys: ["k", "k"],
+        booking: { plan: { kind: "fixed" } },
+      }).success,
+    ).toBe(false);
+    expect(
+      rebook.safeParse({ keys: ["k"], booking: { skip: "x" } }).success,
+    ).toBe(false);
+    const transfer = {
+      name: "T",
+      cycle: { type: "monthly", day: 1 },
+      amount: "auto",
+    };
+    expect(
+      settingsSchema.safeParse({ transfers: [transfer, transfer] }).success,
+    ).toBe(false);
+    expect(categoryPatch.safeParse({ excluded: true }).success).toBe(true);
   });
 });

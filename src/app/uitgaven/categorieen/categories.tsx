@@ -16,8 +16,14 @@ function CategoryRow({ category, onResult }: { category: CategoryDto; onResult: 
     startTransition(async () => onResult(await deleteCategory(category.id)));
   }
 
+  function toggleExcluded(excluded: boolean) {
+    startTransition(async () =>
+      onResult(await saveCategory(category.id, { excluded })),
+    );
+  }
+
   return (
-    <li className="flex gap-2 py-2">
+    <li className="flex flex-wrap items-center gap-2 py-2">
       <form
         className="flex flex-1 gap-2"
         onSubmit={(event) => {
@@ -30,6 +36,15 @@ function CategoryRow({ category, onResult }: { category: CategoryDto; onResult: 
           Hernoemen
         </Button>
       </form>
+      <label className="text-muted-foreground flex items-center gap-1.5 text-sm">
+        <input
+          type="checkbox"
+          checked={category.excluded}
+          onChange={(event) => toggleExcluded(event.target.checked)}
+          disabled={pending}
+        />
+        Niet meetellen
+      </label>
       <Button size="sm" variant="ghost" onClick={remove} disabled={pending}>
         Verwijderen
       </Button>
@@ -63,7 +78,11 @@ export function Categories({ categories }: { categories: CategoryDto[] }) {
       <ResultMessage result={result} />
       <ul className="divide-y">
         {categories.map((category) => (
-          <CategoryRow key={`${category.id}-${category.name}`} category={category} onResult={setResult} />
+          <CategoryRow
+            key={`${category.id}-${category.name}-${category.excluded}`}
+            category={category}
+            onResult={setResult}
+          />
         ))}
       </ul>
     </div>

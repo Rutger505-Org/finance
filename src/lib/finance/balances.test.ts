@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { planChanges, reconcile, type Change } from "./balances";
+import { planChanges, reconcile, type Change, type PlanLine } from "./balances";
 import { parseDay } from "./dates";
 import type { PlanInput } from "./plan";
 
@@ -113,5 +113,163 @@ describe("planChanges", () => {
       ["refund", -2000],
       ["transfer", 2000],
     ]);
+  });
+
+  const line = (
+    date: string,
+    amount: number,
+    link: PlanLine["link"],
+    name = "Regel",
+  ): PlanLine => ({
+    day: d(date),
+    amount,
+    name,
+    link,
+  });
+
+  test("a linked occurrence is replaced by its lines: real day and amount, planned ones stay", () => {
+    const lines = [
+      // Telefoon due 10-10, paid in two lines (one on another day).
+      line(
+        "2026-10-11",
+        -1900,
+        { kind: "expense", expenseId: 1, day: d("2026-10-10") },
+        "Telefoon",
+      ),
+      line(
+        "2026-10-12",
+        -80,
+        { kind: "expense", expenseId: 1, day: d("2026-10-10") },
+        "Telefoon",
+      ),
+      // Salaris of 25-09 (outside the range) arrived late: counts at its real day.
+      line(
+        "2026-10-02",
+        50000,
+        { kind: "income", incomeId: 7, day: d("2026-09-25") },
+        "Salaris",
+      ),
+      // Salaris of 25-10 paid after the range: the planned one still goes.
+      line(
+        "2026-11-02",
+        50100,
+        { kind: "income", incomeId: 7, day: d("2026-10-25") },
+        "Salaris",
+      ),
+      line("2026-10-15", -500, { kind: "fixed" }, "Vaste lastenrekening"),
+    ];
+    const changes = planChanges(
+      { ...input, incomes: [{ ...input.incomes[0], id: 7 }] },
+      "current",
+      after,
+      until,
+      lines,
+    );
+    expect(
+      changes.map((c) => [
+        c.kind,
+        c.day,
+        c.amount,
+        c.planned ?? false,
+        c.plan ?? null,
+      ]),
+    ).toEqual([
+      ["refund", d("2026-10-09"), 2000, true, null],
+      ["transfer", d("2026-10-26"), -2000, true, null],
+      [
+        "expense",
+        d("2026-10-11"),
+        -1900,
+        false,
+        { day: d("2026-10-10"), amount: -2000, real: -1980 },
+      ],
+      [
+        "expense",
+        d("2026-10-12"),
+        -80,
+        false,
+        { day: d("2026-10-10"), amount: -2000, real: -1980 },
+      ],
+      [
+        "income",
+        d("2026-10-02"),
+        50000,
+        false,
+        { day: d("2026-09-25"), amount: 50000, real: 50000 },
+      ],
+      ["unplannedTransfer", d("2026-10-15"), -500, false, null],
+    ]);
+  });
+
+  test("fixed-costs account: linked transfers and refunds the other way round, charges stay planned", () => {
+    const fixedInput: PlanInput = {
+      ...input,
+      expenses: [
+        ...input.expenses,
+        {
+          id: 2,
+          name: "Verzekering",
+          amount: 3000,
+          cycle: { type: "monthly", day: 5 },
+          account: "fixed",
+        },
+      ],
+    };
+    const lines = [
+      line("2026-10-27", -2000, {
+        kind: "transfer",
+        transfer: "Naar vaste lasten",
+        day: d("2026-10-26"),
+      }),
+      line("2026-10-09", 2000, {
+        kind: "refund",
+        expenseId: 1,
+        day: d("2026-10-09"),
+      }),
+      line("2026-10-20", 700, { kind: "fixed" }),
+      line("2026-10-10", -2000, {
+        kind: "expense",
+        expenseId: 1,
+        day: d("2026-10-10"),
+      }),
+    ];
+    const changes = planChanges(fixedInput, "fixed", after, until, lines);
+    expect(
+      changes.map((c) => [c.kind, c.day, c.amount, c.planned ?? false]),
+    ).toEqual([
+      ["charge", d("2026-10-05"), -3000, true],
+      ["transfer", d("2026-10-27"), 2000, false],
+      ["refund", d("2026-10-09"), -2000, false],
+      ["unplannedTransfer", d("2026-10-20"), -700, false],
+    ]);
+    expect(changes[1].plan).toEqual({
+      day: d("2026-10-26"),
+      amount: 2000,
+      real: 2000,
+    });
+  });
+
+  test("each checkpoint lists the changes since the one before", () => {
+    const result = reconcile(
+      [
+        { id: 1, day: d("2026-10-01"), time: null, amount: 10000 },
+        { id: 2, day: d("2026-10-31"), time: null, amount: 0 },
+      ],
+      planChanges(input, "current", d("2026-09-30"), until),
+      d("2026-10-01"),
+      until,
+    );
+    expect(result.checkpoints[0].changes).toEqual([]);
+    expect(
+      result.checkpoints[1].changes.map((c) => [c.kind, c.planned]),
+    ).toEqual([
+      ["refund", true],
+      ["expense", true],
+      ["income", true],
+      ["transfer", true],
+    ]);
+    expect(result.checkpoints[1].difference).toBe(
+      -10000 - 2000 - 50000 + 2000 + 2000,
+    );
   });
 });

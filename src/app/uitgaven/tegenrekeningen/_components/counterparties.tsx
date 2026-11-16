@@ -15,7 +15,7 @@ const formatIban = (iban: string) => iban.replace(/(.{4})/g, "$1 ").trim();
 const handlings: Record<CounterpartyHandling, string> = {
   spending: "Uitgave",
   income: "Losse inkomst",
-  skip: "Overslaan",
+  plan: "Vaste post",
   ask: "Per regel",
 };
 

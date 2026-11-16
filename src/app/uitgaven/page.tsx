@@ -2,7 +2,13 @@ import { MonthNav } from "@/app/_components/month-nav";
 import { PieChart } from "@/components/pie-chart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { isoDay } from "@/lib/finance/dates";
-import { isValidMonth, monthRange, sum, totalsBy } from "@/lib/finance/spending";
+import {
+  counted,
+  isValidMonth,
+  monthRange,
+  sum,
+  totalsBy,
+} from "@/lib/finance/spending";
 import { money, monthLabel } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
 import type { Metadata } from "next";
@@ -32,14 +38,18 @@ export default async function SpendingPage({
     counterparties: repository.listCounterparties(),
   };
   const spendings = repository.listSpendings(monthRange(month));
-  const lines = spendings.map((s) => ({ ...s, amount: cents(s.amount) }));
+  const all = spendings.map((s) => ({ ...s, amount: cents(s.amount) }));
+  // Excluded categories don't count in the totals and the chart; per outing keeps every spending, like Uitjes.
+  const lines = counted(all, lookups.categories);
   const total = sum(lines);
+  const excludedCount = all.length - lines.length;
+  const excludedTotal = sum(all) - total;
   const incomes = repository.listOneOffIncomes(monthRange(month));
   const received = sum(incomes.map((income) => ({ amount: cents(income.amount) })));
   const name = (list: { id: number; name: string }[], id: number | null, none: string) =>
     id === null ? none : (list.find((item) => item.id === id)?.name ?? `#${id}`);
   const perCategory = totalsBy(lines, "categoryId");
-  const perOuting = totalsBy(lines, "outingId");
+  const perOuting = totalsBy(all, "outingId");
 
   return (
     <>
@@ -66,7 +76,10 @@ export default async function SpendingPage({
           <CardHeader>
             <CardTitle>Totaal: {money(total)}</CardTitle>
             <CardDescription>
-              {spendings.length} {spendings.length === 1 ? "uitgave" : "uitgaven"} per categorie
+              {lines.length} {lines.length === 1 ? "uitgave" : "uitgaven"} per
+              categorie
+              {excludedCount > 0 &&
+                `; ${excludedCount} in uitgesloten categorieën (${money(excludedTotal)}) ${excludedCount === 1 ? "telt" : "tellen"} niet mee`}
             </CardDescription>
           </CardHeader>
           <CardContent>

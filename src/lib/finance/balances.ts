@@ -1,5 +1,5 @@
 import type { Day } from "./dates";
-import { movementsBetween, type PlanInput } from "./plan";
+import { movementsBetween, resolveTransfers, type PlanInput } from "./plan";
 import { occurrencesBetween } from "./schedule";
 import type { BalanceAccount } from "./schemas";
 
@@ -11,6 +11,8 @@ import type { BalanceAccount } from "./schemas";
  * - transfer, charge (direct debit), refund: the fixed-costs account
  * - fromSavings, toSavings: the current account's side of a savings transfer
  * - fromCurrent, toCurrent: the savings account's side; withdrawal (planned, after today): a savings account
+ * - unplannedTransfer: a bank line moving money between the current and fixed-costs account outside the plan
+ *   (both accounts)
  */
 export type ChangeKind =
   | "income"
@@ -24,7 +26,45 @@ export type ChangeKind =
   | "toSavings"
   | "fromCurrent"
   | "toCurrent"
-  | "withdrawal";
+  | "withdrawal"
+  | "unplannedTransfer";
+
+/**
+ * A booked bank line (current account) linked to a plan occurrence: an income or expense (paid from the current
+ * account) on its due day, the refund of an expense on its refund day (fixed → current), a transfer from the
+ * settings on its day (current → fixed), or `fixed`: money between the current and fixed-costs account outside
+ * the plan.
+ */
+export type PlanLink =
+  | { kind: "income"; incomeId: number; day: Day }
+  | { kind: "expense"; expenseId: number; day: Day }
+  | { kind: "refund"; expenseId: number; day: Day }
+  | { kind: "transfer"; transfer: string; day: Day }
+  | { kind: "fixed" };
+
+export interface PlanLine {
+  day: Day;
+  /** Bank sign on the current account: negative is money out. */
+  amount: number;
+  /** Shown in the changes: the item's name. */
+  name: string;
+  link: PlanLink;
+}
+
+/** Identifies one occurrence of a plan item; null for `fixed`. */
+export function occurrenceKey(link: PlanLink): string | null {
+  switch (link.kind) {
+    case "income":
+      return `income:${link.incomeId}:${link.day}`;
+    case "expense":
+    case "refund":
+      return `${link.kind}:${link.expenseId}:${link.day}`;
+    case "transfer":
+      return `transfer:${link.transfer}:${link.day}`;
+    case "fixed":
+      return null;
+  }
+}
 
 /** A planned or booked change of one account's balance. */
 export interface Change {
@@ -35,6 +75,13 @@ export interface Change {
   /** Signed: negative is money out. */
   amount: number;
   kind: ChangeKind;
+  /** A planned occurrence that no bank line is linked to: counted as planned. */
+  planned?: boolean;
+  /**
+   * A bank line linked to a planned occurrence: its planned day and amount (null when the item is no longer in
+   * the plan) and the real amount of all lines linked to it together, so deviations show.
+   */
+  plan?: { day: Day; amount: number | null; real: number };
 }
 
 export interface Checkpoint {
@@ -50,6 +97,8 @@ export interface CheckedCheckpoint extends Checkpoint {
   expected: number | null;
   /** Real minus expected: positive is more money than expected. */
   difference: number | null;
+  /** What happened between the checkpoint before and this one, in order; empty for the first. */
+  changes: Change[];
 }
 
 export interface Reconciliation {
@@ -71,49 +120,127 @@ export const changePosition = (change: Pick<Change, "day" | "time">) =>
 export const checkpointPosition = (checkpoint: Pick<Checkpoint, "day" | "time">) =>
   checkpoint.day * 1441 + (checkpoint.time ? minutes(checkpoint.time) : 1440);
 
-/** Planned changes of the current or fixed-costs account in (after, until]. */
+/**
+ * Changes of the current or fixed-costs account in (after, until] from the plan and the bank lines linked to it:
+ * a planned occurrence with at least one linked line is replaced by its lines (real day, real amount; the
+ * fixed-costs side the other way round), the rest counts as planned. `lines` are all linked lines, whatever
+ * their day, so an occurrence paid outside the range is still replaced. Charges of the fixed-costs account are
+ * never linked: they aren't on the current account's statement.
+ */
 export function planChanges(
   input: PlanInput,
   account: "current" | "fixed",
   after: Day,
   until: Day,
+  lines: PlanLine[] = [],
 ): Change[] {
-  const change = (
+  const planned: (Change & { key: string | null })[] = [];
+  const add = (
+    key: string | null,
     day: Day,
     name: string,
     amount: number,
     kind: ChangeKind,
-  ): Change => ({
-    day,
-    time: null,
-    name,
-    amount,
-    kind,
-  });
-  const changes: Change[] = [];
+  ) =>
+    planned.push({ key, day, time: null, name, amount, kind, planned: true });
   for (const movement of movementsBetween(input, after, until)) {
-    const { day, name, amount, kind } = movement;
+    const { day, name, amount, kind, itemId } = movement;
+    const key = (k: string) =>
+      itemId === undefined ? null : `${k}:${itemId}:${day}`;
     if (account === "current") {
-      if (kind === "income") changes.push(change(day, name, amount, "income"));
+      if (kind === "income") add(key("income"), day, name, amount, "income");
       if (kind === "transfer")
-        changes.push(change(day, name, -amount, "transfer"));
-      if (kind === "refund") changes.push(change(day, name, amount, "refund"));
+        add(`transfer:${name}:${day}`, day, name, -amount, "transfer");
+      if (kind === "refund") add(key("refund"), day, name, amount, "refund");
     } else {
       if (kind === "transfer")
-        changes.push(change(day, name, amount, "transfer"));
-      if (kind === "charge") changes.push(change(day, name, -amount, "charge"));
-      if (kind === "refund") changes.push(change(day, name, -amount, "refund"));
+        add(`transfer:${name}:${day}`, day, name, amount, "transfer");
+      if (kind === "charge") add(null, day, name, -amount, "charge");
+      if (kind === "refund") add(key("refund"), day, name, -amount, "refund");
     }
   }
   if (account === "current") {
     for (const expense of input.expenses) {
       if (expense.account !== "current") continue;
       for (const day of occurrencesBetween(expense.cycle, after, until)) {
-        changes.push(change(day, expense.name, -expense.amount, "expense"));
+        add(
+          expense.id === undefined ? null : `expense:${expense.id}:${day}`,
+          day,
+          expense.name,
+          -expense.amount,
+          "expense",
+        );
       }
     }
   }
+
+  const sign = account === "current" ? 1 : -1;
+  const real = new Map<string, number>();
+  for (const line of lines) {
+    const key = occurrenceKey(line.link);
+    if (key !== null) real.set(key, (real.get(key) ?? 0) + sign * line.amount);
+  }
+  const changes: Change[] = planned
+    .filter((change) => change.key === null || !real.has(change.key))
+    .map(({ key: _key, ...change }) => change);
+  for (const line of lines) {
+    if (line.day <= after || line.day > until) continue;
+    const { link } = line;
+    if (
+      account === "fixed" &&
+      (link.kind === "income" || link.kind === "expense")
+    )
+      continue;
+    const change: Change = {
+      day: line.day,
+      time: null,
+      name: line.name,
+      amount: sign * line.amount,
+      kind: link.kind === "fixed" ? "unplannedTransfer" : link.kind,
+    };
+    if (link.kind !== "fixed") {
+      change.plan = {
+        day: link.day,
+        amount: plannedAmount(input, account, link),
+        real: real.get(occurrenceKey(link)!)!,
+      };
+    }
+    changes.push(change);
+  }
   return changes;
+}
+
+/** The planned amount of a linked occurrence on this account's side; null when the item isn't in the plan. */
+function plannedAmount(
+  input: PlanInput,
+  account: "current" | "fixed",
+  link: Exclude<PlanLink, { kind: "fixed" }>,
+) {
+  const sign = account === "current" ? 1 : -1;
+  switch (link.kind) {
+    case "income": {
+      const income = input.incomes.find((item) => item.id === link.incomeId);
+      return income ? income.amount : null;
+    }
+    case "expense": {
+      const expense = input.expenses.find(
+        (item) => item.id === link.expenseId && item.account === "current",
+      );
+      return expense ? -expense.amount : null;
+    }
+    case "refund": {
+      const expense = input.expenses.find(
+        (item) => item.id === link.expenseId && item.account === "current",
+      );
+      return expense ? sign * expense.amount : null;
+    }
+    case "transfer": {
+      const transfer = resolveTransfers(input, link.day).find(
+        (item) => item.name === link.transfer,
+      );
+      return transfer ? -sign * transfer.amount : null;
+    }
+  }
 }
 
 /** A checkpoint less than a euro off counts as matching. */
@@ -183,6 +310,7 @@ export function reconcile(
       ...checkpoint,
       expected: running,
       difference: running === null ? null : checkpoint.amount - running,
+      changes: running === null ? [] : since,
     });
     running = checkpoint.amount;
     since = [];

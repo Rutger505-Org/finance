@@ -1,4 +1,4 @@
-import { categoryCreate } from "@/lib/finance/schemas";
+import { categoryPatch } from "@/lib/finance/schemas";
 import { repository } from "@/server/finance";
 import { handle, type IdContext, json, noContent, parseId, readJson } from "@/server/http";
 
@@ -7,7 +7,12 @@ export const dynamic = "force-dynamic";
 export function PATCH(request: Request, { params }: IdContext) {
   return handle(async () => {
     const id = parseId((await params).id);
-    return json(repository.renameCategory(id, categoryCreate.parse(await readJson(request))));
+    return json(
+      repository.updateCategory(
+        id,
+        categoryPatch.parse(await readJson(request)),
+      ),
+    );
   });
 }
 

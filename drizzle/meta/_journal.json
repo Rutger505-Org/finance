@@ -71,6 +71,20 @@
       "when": 1794868981515,
       "tag": "0009_savings_transfers",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1794871324542,
+      "tag": "0010_plan_links_excluded_categories",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794871328079,
+      "tag": "0011_counterparty_handling_plan",
+      "breakpoints": true
     }
   ]
 }

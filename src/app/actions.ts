@@ -3,6 +3,7 @@
 import {
   balanceCreate,
   categoryCreate,
+  categoryPatch,
   counterpartyCreate,
   counterpartyPatch,
   expenseCreate,
@@ -158,7 +159,7 @@ export async function saveCategory(id: number | null, input: unknown) {
   return run(() =>
     id === null
       ? repository.createCategory(categoryCreate.parse(input))
-      : repository.renameCategory(id, categoryCreate.parse(input)),
+      : repository.updateCategory(id, categoryPatch.parse(input)),
   );
 }
 
