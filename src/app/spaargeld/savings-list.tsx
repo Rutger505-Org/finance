@@ -17,6 +17,7 @@ import { date, moneyEuros, monthLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useState, useTransition } from "react";
 import { SavingsForm } from "./savings-form";
+import { SavingsTransfers } from "./transfers";
 
 const fullDate = (iso: string) => `${date(parseDay(iso))} ${iso.slice(0, 4)}`;
 
@@ -25,7 +26,12 @@ export function SavingsList({
   scenarios,
   today,
 }: {
-  accounts: { account: SavingsAccountDto; summary: SavingsSummary | null }[];
+  accounts: {
+    account: SavingsAccountDto;
+    /** Checkpoint plus the transfers after it. */
+    balance: number | null;
+    summary: SavingsSummary | null;
+  }[];
   scenarios: ScenarioDto[];
   today: string;
 }) {
@@ -41,7 +47,7 @@ export function SavingsList({
   function remove(account: SavingsAccountDto) {
     if (
       !confirm(
-        `Spaarrekening "${account.name}" en haar checkpoints verwijderen?`,
+        `Spaarrekening "${account.name}" met haar checkpoints en overboekingen verwijderen?`,
       )
     )
       return;
@@ -53,7 +59,7 @@ export function SavingsList({
   return (
     <>
       <ResultMessage result={result} />
-      {accounts.map(({ account, summary }) => (
+      {accounts.map(({ account, balance, summary }) => (
         <Card key={account.id}>
           <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
             <div className="space-y-1.5">
@@ -65,6 +71,11 @@ export function SavingsList({
                   </span>
                 )}
               </CardTitle>
+              {account.iban && (
+                <p className="text-muted-foreground font-mono text-xs">
+                  {account.iban.replace(/(.{4})/g, "$1 ").trim()}
+                </p>
+              )}
               <CardDescription>
                 {account.until
                   ? `Wat na de geplande uitgaven over is, verdeeld${summary?.firstMonth ? ` van ${monthLabel(summary.firstMonth)}` : ""} t/m ${monthLabel(account.until)}.`
@@ -104,26 +115,46 @@ export function SavingsList({
                 <p className="flex justify-between">
                   <span>
                     {account.balance
-                      ? `Saldo op ${fullDate(account.balance.date)}`
+                      ? `Checkpoint ${fullDate(account.balance.date)}${account.balance.time ? ` ${account.balance.time}` : ""}`
                       : "Nog geen saldo"}
                   </span>
                   <span>
                     {account.balance && moneyEuros(account.balance.amount)}
                   </span>
                 </p>
-                {(summary?.withdrawals ?? account.withdrawals).map(
-                  (w, index) => (
-                    <p
-                      key={index}
-                      className="text-muted-foreground flex justify-between"
-                    >
-                      <span>
-                        {w.name} · {fullDate(w.date)}
-                      </span>
-                      <span>{moneyEuros(-w.amount)}</span>
-                    </p>
-                  ),
+                {balance !== null && balance !== account.balance?.amount && (
+                  <p className="flex justify-between">
+                    <span>Met overboekingen sindsdien</span>
+                    <span>{moneyEuros(balance)}</span>
+                  </p>
                 )}
+                {[...account.withdrawals]
+                  .sort((a, b) => a.date.localeCompare(b.date))
+                  .map((w, index) => {
+                    const past = w.date <= today;
+                    const counted =
+                      !summary ||
+                      summary.withdrawals.some(
+                        (s) => s.date === w.date && s.name === w.name,
+                      );
+                    return (
+                      <p
+                        key={index}
+                        className={cn(
+                          "text-muted-foreground flex justify-between",
+                          (past || !counted) && "opacity-60",
+                        )}
+                      >
+                        <span>
+                          {w.name} · {fullDate(w.date)}
+                          {past && " · geweest"}
+                        </span>
+                        <span className={cn(past && "line-through")}>
+                          {moneyEuros(-w.amount)}
+                        </span>
+                      </p>
+                    );
+                  })}
                 {summary && (
                   <>
                     <p className="flex justify-between border-t pt-1">
@@ -150,6 +181,11 @@ export function SavingsList({
                     </p>
                   </>
                 )}
+                <SavingsTransfers
+                  savingsAccountId={account.id}
+                  transfers={account.transfers}
+                  today={today}
+                />
               </div>
             )}
           </CardContent>

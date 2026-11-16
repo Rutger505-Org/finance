@@ -6,7 +6,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { isoDay } from "@/lib/finance/dates";
-import { savingsPerMonth, summarizeAccount } from "@/lib/finance/savings";
+import {
+  savingsBalance,
+  savingsPerMonth,
+  summarizeAccount,
+} from "@/lib/finance/savings";
 import { moneyEuros } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
 import type { Metadata } from "next";
@@ -21,7 +25,7 @@ export default function SavingsPage() {
   const accounts = repository.listSavingsAccounts();
   const scenarios = repository.listScenarios();
   const total = accounts.reduce(
-    (sum, account) => sum + (account.balance?.amount ?? 0),
+    (sum, account) => sum + (savingsBalance(account) ?? 0),
     0,
   );
   return (
@@ -32,7 +36,8 @@ export default function SavingsPage() {
           <CardHeader>
             <CardTitle>Totaal {moneyEuros(total)}</CardTitle>
             <CardDescription>
-              Laatste saldo van elke spaarrekening. Per maand uit spaargeld telt
+              Saldo van elke spaarrekening: het laatste checkpoint plus de
+              overboekingen sindsdien. Per maand uit spaargeld telt
               mee in &ldquo;Per maand&rdquo; bij Posten, alleen in de situaties
               van de rekening.
             </CardDescription>
@@ -53,6 +58,7 @@ export default function SavingsPage() {
       <SavingsList
         accounts={accounts.map((account) => ({
           account,
+          balance: savingsBalance(account),
           summary: summarizeAccount(account, today),
         }))}
         scenarios={scenarios}

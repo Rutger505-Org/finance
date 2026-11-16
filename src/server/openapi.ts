@@ -6,6 +6,7 @@ import {
   categoryCreate,
   categoryDto,
   configSchema,
+  convertToSavings,
   counterpartyCreate,
   counterpartyDto,
   counterpartyPatch,
@@ -24,6 +25,8 @@ import {
   savingsAccountCreate,
   savingsAccountDto,
   savingsAccountPatch,
+  savingsTransferCreate,
+  savingsTransferDto,
   scenarioCreate,
   scenarioDto,
   scenarioPatch,
@@ -125,13 +128,46 @@ function savingsPaths() {
   const item = paths["/api/v1/savings-accounts/{id}"] as unknown as Ops;
   Object.assign(list.get, {
     summary:
-      "List savings accounts with their balance (latest checkpoint) and summary: what's free after the planned withdrawals, per month from next month through `until` (null when not spread or without balance). `scenarioIds`: the scenarios whose monthly budget the spread counts in.",
+      "List savings accounts with their latest checkpoint (`balance`), their transfers and summary: what's free after the planned withdrawals after today, per month from next month through `until` (null when not spread or without balance). The balance the summary uses is the checkpoint plus the transfers after it. `scenarioIds`: the scenarios whose monthly budget the spread counts in. `iban`: its own IBAN, unique.",
   });
   Object.assign(list.post, {
     summary: "Create a savings account; `balance` saves its first checkpoint",
   });
-  Object.assign(item.delete, { summary: "Delete a savings account and its checkpoints" });
+  Object.assign(item.delete, { summary: "Delete a savings account, its checkpoints and transfers; their statement lines are freed" });
   return paths;
+}
+
+function savingsTransferPaths() {
+  const tags = ["Savings transfer"];
+  return {
+    "/api/v1/savings-transfers": {
+      get: {
+        tags,
+        summary:
+          "Real money moved between a savings account and the current account, newest first. amount > 0: savings → current, < 0: current → savings.",
+        parameters: [
+          { name: "savingsAccountId", in: "query", schema: { type: "integer" } },
+          { name: "from", in: "query", schema: { type: "string", format: "date" }, description: "Inclusive" },
+          { name: "to", in: "query", schema: { type: "string", format: "date" }, description: "Inclusive" },
+        ],
+        responses: { "200": list("SavingsTransfer"), ...errors },
+      },
+      post: {
+        tags,
+        summary: "Record a savings transfer by hand (statement lines are booked with POST /bookings). Not in the future.",
+        requestBody: body("SavingsTransferCreate"),
+        responses: { "201": ok("SavingsTransfer", "Created"), ...errors },
+      },
+    },
+    "/api/v1/savings-transfers/{id}": {
+      parameters: idParam,
+      delete: {
+        tags,
+        summary: "Delete a savings transfer; its booked statement lines are freed",
+        responses: { "204": { description: "Deleted" }, ...errors },
+      },
+    },
+  };
 }
 
 export function openApiDocument() {
@@ -194,6 +230,7 @@ export function openApiDocument() {
         },
       },
       ...savingsPaths(),
+      ...savingsTransferPaths(),
       ...crud("Income", "incomes", "Income"),
       ...crud("Expense", "expenses", "Expense"),
       ...spendingPaths(),
@@ -204,10 +241,10 @@ export function openApiDocument() {
         post: {
           tags: ["Booking"],
           summary:
-            "Book statement lines, all or nothing: each item turns its lines into one spending (`spending`), one one-off income (`income`) or skips them (`skip`). An already booked line is a 409. Returns the created spending or one-off income per item (null when skipped).",
+            "Book statement lines, all or nothing: each item turns its lines into one spending (`spending`), one one-off income (`income`), one savings transfer (`savings`: current-account lines to or from a savings account, `account` = id, name or IBAN; amount defaults to the lines' sum, bank sign, date to the first line's) or skips them (`skip`). An already booked line is a 409. Returns the created spending, one-off income or savings transfer per item (null when skipped).",
           requestBody: body("Bookings"),
           responses: {
-            "201": { description: "Booked", content: { "application/json": { schema: { type: "array", items: { anyOf: [ref("Spending"), ref("OneOffIncome"), { type: "null" }] } } } } },
+            "201": { description: "Booked", content: { "application/json": { schema: { type: "array", items: { anyOf: [ref("Spending"), ref("OneOffIncome"), ref("SavingsTransfer"), { type: "null" }] } } } } },
             "409": ok("Error", "A line is already booked"),
             ...errors,
           },
@@ -225,9 +262,26 @@ export function openApiDocument() {
         },
         delete: {
           tags: ["Booking"],
-          summary: "Un-skip a line. Lines of a spending or one-off income are freed by deleting that.",
+          summary: "Un-skip a line. Lines of a spending, one-off income or savings transfer are freed by deleting that.",
           parameters: [{ name: "key", in: "query", required: true, schema: { type: "string" } }],
-          responses: { "204": { description: "Deleted" }, "409": ok("Error", "Line belongs to a spending or one-off income"), ...errors },
+          responses: {
+            "204": { description: "Deleted" },
+            "409": ok("Error", "Line belongs to a spending, one-off income or savings transfer"),
+            ...errors,
+          },
+        },
+      },
+      "/api/v1/booked-lines/convert-to-savings": {
+        post: {
+          tags: ["Booking"],
+          summary:
+            "Turn a skipped line (own-account transfer) into a savings transfer with the line's date and amount, without un-booking it. The skip reason is cleared (it becomes the default description) and the line links the transfer.",
+          requestBody: body("ConvertToSavings"),
+          responses: {
+            "201": ok("SavingsTransfer", "Converted"),
+            "409": ok("Error", "Line isn't (only) skipped"),
+            ...errors,
+          },
         },
       },
       "/api/v1/categories": {
@@ -265,7 +319,7 @@ export function openApiDocument() {
         get: {
           tags: ["Balance"],
           summary:
-            "Expected balance of an account: each checkpoint compared with the one before plus the planned incomes, expenses, transfers (real scenario), spendings and one-off incomes (current account) and withdrawals (savings) in between. Returns `expected` (end of `to`), `checkpoints` (with expected and difference = real − expected), `since` (changes after the last checkpoint) and `days` (expected balance per day from `from`).",
+            "Expected balance of an account: each checkpoint compared with the one before plus the planned incomes, expenses, transfers (real scenario), spendings and one-off incomes (current account), savings transfers (both accounts) and planned withdrawals after today (savings) in between. Returns `expected` (end of `to`), `checkpoints` (with expected and difference = real − expected), `since` (changes after the last checkpoint) and `days` (expected balance per day from `from`).",
           parameters: [
             { name: "account", in: "query", required: true, schema: { type: "string", enum: ["current", "fixed", "savings"] } },
             { name: "savingsAccountId", in: "query", schema: { type: "integer" }, description: "Required for savings" },
@@ -291,6 +345,9 @@ export function openApiDocument() {
         SavingsAccount: schema(savingsAccountDto),
         SavingsAccountCreate: schema(savingsAccountCreate),
         SavingsAccountPatch: schema(savingsAccountPatch),
+        SavingsTransfer: schema(savingsTransferDto),
+        SavingsTransferCreate: schema(savingsTransferCreate),
+        ConvertToSavings: schema(convertToSavings),
         Spending: schema(spendingDto),
         SpendingCreate: schema(spendingCreate),
         SpendingPatch: schema(spendingPatch),

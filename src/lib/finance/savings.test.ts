@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { parseDay } from "./dates";
-import { inScenario, summarizeSavings } from "./savings";
+import { inScenario, savingsBalance, summarizeSavings } from "./savings";
 
 describe("savings", () => {
   const savings = {
     balance: 5000,
-    date: "2026-03-10",
     until: "2027-02",
     withdrawals: [
       { name: "Fee", amount: 1000, date: "2026-09-01" },
@@ -32,11 +31,35 @@ describe("savings", () => {
     expect(summary.firstMonth).toBeNull();
   });
 
-  test("short: negative free money", () => {
-    const summary = summarizeSavings({ ...savings, balance: 1000 }, parseDay("2026-12-20"));
+  test("short: negative free money; withdrawals up to today are history", () => {
+    const summary = summarizeSavings({ ...savings, balance: 400 }, parseDay("2026-08-20"));
+    expect(summary.withdrawals.map((w) => w.name)).toEqual(["Fee"]);
     expect(summary.free).toBe(-600);
-    expect(summary.months).toBe(2);
-    expect(summary.perMonth).toBe(-300);
+    expect(summary.months).toBe(6);
+    expect(summary.perMonth).toBe(-100);
+  });
+
+  test("balance: latest checkpoint plus the transfers after it", () => {
+    const transfer = (date: string, time: string | null, amount: number) => ({
+      id: 1,
+      savingsAccountId: 1,
+      date,
+      time,
+      amount,
+      description: "Buffer",
+      note: null,
+    });
+    const transfers = [
+      transfer("2026-03-09", null, 100), // before the checkpoint
+      transfer("2026-03-10", null, 100), // without a time: start of the day, before it
+      transfer("2026-03-10", "09:00", 100), // before 10:00
+      transfer("2026-03-10", "11:00", 40), // to current: out of savings
+      transfer("2026-03-11", null, -25), // to savings
+    ];
+    expect(savingsBalance({ balance: { amount: 1000, date: "2026-03-10", time: "10:00" }, transfers })).toBe(985);
+    // Without a time the checkpoint is the end of the day.
+    expect(savingsBalance({ balance: { amount: 1000, date: "2026-03-10", time: null }, transfers })).toBe(1025);
+    expect(savingsBalance({ balance: null, transfers })).toBeNull();
   });
 
   test("items without scenarios are in every scenario", () => {

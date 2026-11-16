@@ -8,6 +8,7 @@ import {
   type BalanceAccount,
   type BalanceCreate,
   type BookedLineDto,
+  type ConvertToSavings,
   type BookedLineFilter,
   type Booking,
   type BalanceDto,
@@ -33,6 +34,10 @@ import {
   type SavingsAccountCreate,
   type SavingsAccountDto,
   type SavingsAccountPatch,
+  type SavingsAccountRef,
+  type SavingsTransferCreate,
+  type SavingsTransferDto,
+  type SavingsTransferFilter,
   type ScenarioCreate,
   type ScenarioDto,
   type ScenarioPatch,
@@ -60,6 +65,7 @@ const {
   oneOffIncome,
   outing,
   savingsAccount,
+  savingsTransfer,
   scenario,
   settings,
   spending,
@@ -73,6 +79,7 @@ type OutingRow = typeof outing.$inferSelect;
 type CounterpartyRow = typeof counterparty.$inferSelect;
 type SpendingRow = typeof spending.$inferSelect;
 type OneOffIncomeRow = typeof oneOffIncome.$inferSelect;
+type SavingsTransferRow = typeof savingsTransfer.$inferSelect;
 
 const toCents = (euros: number) => Math.round(euros * 100);
 const toEuros = (cents: number) => cents / 100;
@@ -116,15 +123,33 @@ function balanceDto(row: BalanceRow): BalanceDto {
 
 type SavingsAccountRow = typeof savingsAccount.$inferSelect;
 
-function savingsAccountDto(row: SavingsAccountRow, latest: BalanceRow | undefined): SavingsAccountDto {
+function savingsTransferDto(row: SavingsTransferRow): SavingsTransferDto {
+  return {
+    id: row.id,
+    savingsAccountId: row.savingsAccountId,
+    date: row.date,
+    time: row.time,
+    amount: toEuros(row.amount),
+    description: row.description,
+    note: row.note,
+  };
+}
+
+function savingsAccountDto(
+  row: SavingsAccountRow,
+  latest: BalanceRow | undefined,
+  transfers: SavingsTransferRow[],
+): SavingsAccountDto {
   return {
     id: row.id,
     name: row.name,
+    iban: row.iban,
     until: row.until,
     withdrawals: row.withdrawals,
     scenarioIds: row.scenarioIds,
     note: row.note,
     balance: latest ? { amount: toEuros(latest.amount), date: latest.date, time: latest.time } : null,
+    transfers: transfers.map(savingsTransferDto),
   };
 }
 
@@ -156,6 +181,7 @@ function bookedLineDto(row: BookedLineRow): BookedLineDto {
     amount: toEuros(row.amount),
     spendingId: row.spendingId,
     oneOffIncomeId: row.oneOffIncomeId,
+    savingsTransferId: row.savingsTransferId,
     skip: row.skipReason,
   };
 }
@@ -213,6 +239,24 @@ function expenseValues(input: ExpensePatch) {
     amount: input.amount === undefined ? undefined : toCents(input.amount),
   };
 }
+
+/** Newest first; a checkpoint without a time is the end of its day, so after the timed ones. */
+const newestCheckpointFirst = [
+  desc(balance.date),
+  desc(sql`${balance.time} is null`),
+  desc(balance.time),
+  desc(balance.id),
+];
+
+/** Newest first, as checkpoints: without a time is the start of the day for a transfer, so last that day. */
+const newestTransferFirst = [
+  desc(savingsTransfer.date),
+  sql`${savingsTransfer.time} is null`,
+  desc(savingsTransfer.time),
+  desc(savingsTransfer.id),
+];
+
+const normalizeIban = (value: string) => value.replace(/\s+/g, "").toUpperCase();
 
 function notFound(kind: string, id: number): never {
   throw new HttpError(404, `${kind} ${id} not found`);
@@ -295,7 +339,7 @@ export function createRepository(db: Db) {
       .select()
       .from(balance)
       .where(and(eq(balance.account, account), lte(balance.date, isoDay(onOrBefore))))
-      .orderBy(desc(balance.date), desc(balance.id))
+      .orderBy(...newestCheckpointFirst)
       .limit(1)
       .get();
   }
@@ -310,14 +354,64 @@ export function createRepository(db: Db) {
           savingsAccountId === undefined ? undefined : eq(balance.savingsAccountId, savingsAccountId),
         ),
       )
-      .orderBy(desc(balance.date), sql`${balance.time} is null`, desc(balance.time), desc(balance.id))
+      .orderBy(...newestCheckpointFirst)
       .limit(1)
       .get();
   }
 
+  function transfersOf(savingsAccountId: number) {
+    return db
+      .select()
+      .from(savingsTransfer)
+      .where(eq(savingsTransfer.savingsAccountId, savingsAccountId))
+      .orderBy(...newestTransferFirst)
+      .all();
+  }
+
+  function toSavingsAccountDto(row: SavingsAccountRow): SavingsAccountDto {
+    return savingsAccountDto(row, latestCheckpoint("savings", row.id), transfersOf(row.id));
+  }
+
   function getSavingsAccount(id: number): SavingsAccountDto {
     const row = db.select().from(savingsAccount).where(eq(savingsAccount.id, id)).get();
-    return row ? savingsAccountDto(row, latestCheckpoint("savings", id)) : notFound("Savings account", id);
+    return row ? toSavingsAccountDto(row) : notFound("Savings account", id);
+  }
+
+  /** By id, IBAN or name (case-insensitive); 400 when unknown or when the name isn't unique. */
+  function resolveSavingsAccount(ref: SavingsAccountRef, path = "account"): SavingsAccountRow {
+    const rows = db.select().from(savingsAccount).all();
+    if (typeof ref === "number") {
+      const row = rows.find((r) => r.id === ref);
+      if (!row) throw new HttpError(400, `${path}: savings account ${ref} does not exist`);
+      return row;
+    }
+    const byIban = rows.find((r) => r.iban !== null && r.iban === normalizeIban(ref));
+    if (byIban) return byIban;
+    const byName = rows.filter((r) => r.name.localeCompare(ref, "nl", { sensitivity: "accent" }) === 0);
+    if (byName.length === 1) return byName[0];
+    throw new HttpError(
+      400,
+      byName.length ? `${path}: more than one savings account is called "${ref}"; use its id` : `${path}: no savings account "${ref}"`,
+    );
+  }
+
+  /** A transfer is real money that moved: not in the future. */
+  function insertSavingsTransfer(target: Db | Tx, input: SavingsTransferCreate, today: Day): SavingsTransferDto {
+    const date = input.date ?? isoDay(today);
+    if (date > isoDay(today)) throw new HttpError(400, "date: a savings transfer can't be in the future");
+    const row = target
+      .insert(savingsTransfer)
+      .values({
+        savingsAccountId: input.savingsAccountId,
+        date,
+        time: input.time ?? null,
+        amount: toCents(input.amount),
+        description: input.description,
+        note: input.note ?? null,
+      })
+      .returning()
+      .get();
+    return savingsTransferDto(row);
   }
 
   function assertNotFuture(date: string, today: Day) {
@@ -636,15 +730,29 @@ export function createRepository(db: Db) {
         .map(bookedLineDto);
     },
     /**
-     * All or nothing: an already booked line is a 409 and nothing is saved. Returns the created spending or
-     * one-off income per booking (null when skipped).
+     * All or nothing: an already booked line is a 409 and nothing is saved. Returns the created spending,
+     * one-off income or savings transfer per booking (null when skipped).
      */
-    book(bookings: Booking[], today: Day): (SpendingDto | OneOffIncomeDto | null)[] {
+    book(bookings: Booking[], today: Day): (SpendingDto | OneOffIncomeDto | SavingsTransferDto | null)[] {
       const keys = bookings.flatMap((item) => item.lines.map((line) => line.key));
       const booked = db.select({ key: bookedLine.key }).from(bookedLine).where(inArray(bookedLine.key, keys)).all();
       if (booked.length > 0) {
         throw new HttpError(409, `Al geboekt: ${booked.map((row) => row.key).join("; ")}`);
       }
+      const transfers = bookings.map((item, index): SavingsTransferCreate | null => {
+        if (!("savings" in item)) return null;
+        const { account, amount, date, ...rest } = item.savings;
+        const total = item.lines.reduce((sum, line) => sum + toCents(line.amount), 0);
+        if (amount === undefined && total === 0) {
+          throw new HttpError(400, `[${index}].savings.amount: the lines add up to 0; give an amount`);
+        }
+        return {
+          ...rest,
+          savingsAccountId: resolveSavingsAccount(account, `[${index}].savings.account`).id,
+          date: date ?? item.lines[0].date,
+          amount: amount ?? toEuros(total),
+        };
+      });
       bookings.forEach((item, index) => {
         const [field, refs] =
           "spending" in item ? ["spending", item.spending] : "income" in item ? ["income", item.income] : [];
@@ -657,9 +765,10 @@ export function createRepository(db: Db) {
         }
       });
       return db.transaction((tx) =>
-        bookings.map((item) => {
+        bookings.map((item, index) => {
           const spent = "spending" in item ? insertSpending(tx, item.spending, today) : null;
           const received = "income" in item ? insertOneOffIncome(tx, item.income, today) : null;
+          const transfer = transfers[index] ? insertSavingsTransfer(tx, transfers[index], today) : null;
           for (const line of item.lines) {
             tx.insert(bookedLine)
               .values({
@@ -668,13 +777,44 @@ export function createRepository(db: Db) {
                 amount: toCents(line.amount),
                 spendingId: spent?.id ?? null,
                 oneOffIncomeId: received?.id ?? null,
+                savingsTransferId: transfer?.id ?? null,
                 skipReason: "skip" in item ? item.skip : null,
               })
               .run();
           }
-          return spent ?? received;
+          return spent ?? received ?? transfer;
         }),
       );
+    },
+    /**
+     * A skipped line (an own-account transfer, booked before savings transfers existed) becomes a savings
+     * transfer with its date and amount, without un-booking it: the skip reason is cleared and the line links
+     * the transfer, so deleting the transfer frees the line like any other booking.
+     */
+    convertToSavings(input: ConvertToSavings): SavingsTransferDto {
+      const row = db.select().from(bookedLine).where(eq(bookedLine.key, input.key)).get();
+      if (!row) throw new HttpError(404, "Line not booked");
+      if (row.skipReason === null || row.spendingId !== null || row.oneOffIncomeId !== null || row.savingsTransferId !== null) {
+        throw new HttpError(409, "Only a skipped line can be converted");
+      }
+      if (row.amount === 0) throw new HttpError(409, "Line amount is 0");
+      const account = resolveSavingsAccount(input.account);
+      return db.transaction((tx) => {
+        const transfer = tx
+          .insert(savingsTransfer)
+          .values({
+            savingsAccountId: account.id,
+            date: row.date,
+            time: null,
+            amount: row.amount,
+            description: input.description ?? row.skipReason!,
+            note: input.note ?? null,
+          })
+          .returning()
+          .get();
+        tx.update(bookedLine).set({ skipReason: null, savingsTransferId: transfer.id }).where(eq(bookedLine.key, row.key)).run();
+        return savingsTransferDto(transfer);
+      });
     },
     /** Un-skip a line; booked lines of a spending or one-off income go with it. */
     deleteBookedLine(key: string): void {
@@ -688,6 +828,9 @@ export function createRepository(db: Db) {
           409,
           `Line belongs to one-off income ${row.oneOffIncomeId}; delete that one-off income instead`,
         );
+      }
+      if (row.savingsTransferId !== null) {
+        throw new HttpError(409, `Line belongs to savings transfer ${row.savingsTransferId}; delete that transfer instead`);
       }
       db.delete(bookedLine).where(eq(bookedLine.key, key)).run();
     },
@@ -817,7 +960,7 @@ export function createRepository(db: Db) {
         .from(savingsAccount)
         .orderBy(sql`${savingsAccount.name} collate nocase`)
         .all()
-        .map((row) => savingsAccountDto(row, latestCheckpoint("savings", row.id)));
+        .map(toSavingsAccountDto);
     },
     getSavingsAccount,
     /** With `balance`, its first checkpoint is saved too. */
@@ -825,10 +968,13 @@ export function createRepository(db: Db) {
       assertScenarios(input.scenarioIds);
       if (input.balance) assertNotFuture(input.balance.date, today);
       const id = db.transaction((tx) => {
-        const row = tx
+        let row: SavingsAccountRow;
+        try {
+          row = tx
           .insert(savingsAccount)
           .values({
             name: input.name,
+            iban: input.iban ?? null,
             until: input.until ?? null,
             withdrawals: input.withdrawals ?? [],
             scenarioIds: input.scenarioIds ?? null,
@@ -836,6 +982,9 @@ export function createRepository(db: Db) {
           })
           .returning()
           .get();
+        } catch (error) {
+          conflict(error, "iban: another savings account has this IBAN");
+        }
         if (input.balance) {
           tx.insert(balance)
             .values({
@@ -852,18 +1001,59 @@ export function createRepository(db: Db) {
     },
     updateSavingsAccount(id: number, patch: SavingsAccountPatch): SavingsAccountDto {
       assertScenarios(patch.scenarioIds);
-      const row = Object.keys(patch).length
-        ? db.update(savingsAccount).set(patch).where(eq(savingsAccount.id, id)).returning().get()
-        : db.select().from(savingsAccount).where(eq(savingsAccount.id, id)).get();
+      let row: SavingsAccountRow | undefined;
+      try {
+        row = Object.keys(patch).length
+          ? db.update(savingsAccount).set(patch).where(eq(savingsAccount.id, id)).returning().get()
+          : db.select().from(savingsAccount).where(eq(savingsAccount.id, id)).get();
+      } catch (error) {
+        conflict(error, "iban: another savings account has this IBAN");
+      }
       if (!row) notFound("Savings account", id);
       return getSavingsAccount(id);
     },
-    /** Its checkpoints go with it. */
+    /** Its checkpoints and transfers go with it; the transfers' statement lines are freed. */
     deleteSavingsAccount(id: number): void {
       db.transaction((tx) => {
         tx.delete(balance).where(eq(balance.savingsAccountId, id)).run();
+        const transferIds = tx
+          .select({ id: savingsTransfer.id })
+          .from(savingsTransfer)
+          .where(eq(savingsTransfer.savingsAccountId, id))
+          .all()
+          .map((r) => r.id);
+        if (transferIds.length) tx.delete(bookedLine).where(inArray(bookedLine.savingsTransferId, transferIds)).run();
+        tx.delete(savingsTransfer).where(eq(savingsTransfer.savingsAccountId, id)).run();
         const row = tx.delete(savingsAccount).where(eq(savingsAccount.id, id)).returning().get();
         if (!row) notFound("Savings account", id);
+      });
+    },
+
+    listSavingsTransfers(filter: SavingsTransferFilter = {}): SavingsTransferDto[] {
+      return db
+        .select()
+        .from(savingsTransfer)
+        .where(
+          and(
+            filter.savingsAccountId ? eq(savingsTransfer.savingsAccountId, filter.savingsAccountId) : undefined,
+            filter.from ? gte(savingsTransfer.date, filter.from) : undefined,
+            filter.to ? lte(savingsTransfer.date, filter.to) : undefined,
+          ),
+        )
+        .orderBy(...newestTransferFirst)
+        .all()
+        .map(savingsTransferDto);
+    },
+    createSavingsTransfer(input: SavingsTransferCreate, today: Day): SavingsTransferDto {
+      resolveSavingsAccount(input.savingsAccountId, "savingsAccountId");
+      return insertSavingsTransfer(db, input, today);
+    },
+    /** Its statement lines count as not booked again. */
+    deleteSavingsTransfer(id: number): void {
+      db.transaction((tx) => {
+        tx.delete(bookedLine).where(eq(bookedLine.savingsTransferId, id)).run();
+        const row = tx.delete(savingsTransfer).where(eq(savingsTransfer.id, id)).returning().get();
+        if (!row) notFound("Savings transfer", id);
       });
     },
 
@@ -887,7 +1077,7 @@ export function createRepository(db: Db) {
             filter.savingsAccountId ? eq(balance.savingsAccountId, filter.savingsAccountId) : undefined,
           ),
         )
-        .orderBy(desc(balance.date), sql`${balance.time} is null`, desc(balance.time), desc(balance.id))
+        .orderBy(...newestCheckpointFirst)
         .limit(filter.limit ?? 100)
         .all()
         .map(balanceDto);
@@ -917,9 +1107,16 @@ export function createRepository(db: Db) {
     /**
      * An account's checkpoints, each compared with what it should have been, and its expected balance per day
      * from `from` through `until`: the real scenario's incomes, expenses and transfers, the spendings and
-     * one-off incomes (current account) and the planned withdrawals (savings).
+     * one-off incomes (current account), the savings transfers (both sides) and the planned withdrawals after
+     * `today` (savings; earlier ones are history, the real ones are transfers).
      */
-    reconcile(account: BalanceAccount, savingsAccountId: number | null, from: Day, until: Day): Reconciliation {
+    reconcile(
+      account: BalanceAccount,
+      savingsAccountId: number | null,
+      from: Day,
+      until: Day,
+      today: Day,
+    ): Reconciliation {
       const rows = db
         .select()
         .from(balance)
@@ -934,11 +1131,32 @@ export function createRepository(db: Db) {
       const first = Math.min(from, ...checkpoints.map((checkpoint) => checkpoint.day));
       const after = first - 1;
       let changes: Change[];
+      const transfers = db
+        .select({ transfer: savingsTransfer, account: savingsAccount.name })
+        .from(savingsTransfer)
+        .innerJoin(savingsAccount, eq(savingsAccount.id, savingsTransfer.savingsAccountId))
+        .where(
+          and(
+            gte(savingsTransfer.date, isoDay(after + 1)),
+            lte(savingsTransfer.date, isoDay(until)),
+            account === "savings" ? eq(savingsTransfer.savingsAccountId, savingsAccountId ?? -1) : undefined,
+          ),
+        )
+        .all();
       if (account === "savings") {
         const withdrawals = savingsAccountId === null ? [] : getSavingsAccount(savingsAccountId).withdrawals;
         changes = withdrawals
           .map((w): Change => ({ day: parseDay(w.date), time: null, name: w.name, amount: -toCents(w.amount), kind: "withdrawal" }))
-          .filter((change) => change.day > after && change.day <= until);
+          .filter((change) => change.day > Math.max(after, today) && change.day <= until);
+        for (const { transfer } of transfers) {
+          changes.push({
+            day: parseDay(transfer.date),
+            time: transfer.time,
+            name: transfer.description,
+            amount: -transfer.amount,
+            kind: transfer.amount > 0 ? "toCurrent" : "fromCurrent",
+          });
+        }
       } else {
         changes = planChanges(planInput(), account, after, until);
         if (account === "current") {
@@ -957,6 +1175,15 @@ export function createRepository(db: Db) {
             .all();
           for (const row of incomes) {
             changes.push({ day: parseDay(row.date), time: row.time, name: row.description, amount: row.amount, kind: "oneOffIncome" });
+          }
+          for (const { transfer, account: name } of transfers) {
+            changes.push({
+              day: parseDay(transfer.date),
+              time: transfer.time,
+              name: `${name}: ${transfer.description}`,
+              amount: transfer.amount,
+              kind: transfer.amount > 0 ? "fromSavings" : "toSavings",
+            });
           }
         }
       }

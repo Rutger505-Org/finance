@@ -55,6 +55,8 @@ export const expense = sqliteTable("expense", {
 export const savingsAccount = sqliteTable("savings_account", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
+  /** Uppercase without spaces; unique when set. */
+  iban: text("iban").unique(),
   /** YYYY-MM, last month it has to last; what's free is spread until then. Null: not spread (a buffer). */
   until: text("until"),
   /** Planned payments from it, amounts in euros as in `savingsWithdrawal`. */
@@ -64,6 +66,32 @@ export const savingsAccount = sqliteTable("savings_account", {
   note: text("note"),
   ...timestamps,
 });
+
+/**
+ * Real money moved between a savings account and the current account (the only account it can move to or from).
+ * Positive `amount`: savings → current; negative: current → savings.
+ */
+export const savingsTransfer = sqliteTable(
+  "savings_transfer",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    savingsAccountId: integer("savings_account_id")
+      .notNull()
+      .references(() => savingsAccount.id, { onDelete: "cascade" }),
+    /** YYYY-MM-DD */
+    date: text("date").notNull(),
+    /** HH:MM, as `spending.time`. */
+    time: text("time"),
+    amount: integer("amount").notNull(),
+    description: text("description").notNull(),
+    note: text("note"),
+    ...timestamps,
+  },
+  (table) => [
+    index("savings_transfer_account_date_idx").on(table.savingsAccountId, table.date),
+    index("savings_transfer_date_idx").on(table.date),
+  ],
+);
 
 /** A checkpoint: the real balance of an account at the end of `date`, or at `time` that day. */
 export const balance = sqliteTable(
@@ -180,7 +208,7 @@ export const oneOffIncome = sqliteTable(
   (table) => [index("one_off_income_date_idx").on(table.date)],
 );
 
-/** A statement line that has been booked: as (part of) a spending or one-off income, or skipped. Lines themselves aren't stored. */
+/** A statement line that has been booked: as (part of) a spending, one-off income or savings transfer, or skipped. Lines themselves aren't stored. */
 export const bookedLine = sqliteTable(
   "booked_line",
   {
@@ -192,6 +220,7 @@ export const bookedLine = sqliteTable(
     amount: integer("amount").notNull(),
     spendingId: integer("spending_id").references(() => spending.id, { onDelete: "cascade" }),
     oneOffIncomeId: integer("one_off_income_id").references(() => oneOffIncome.id, { onDelete: "cascade" }),
+    savingsTransferId: integer("savings_transfer_id").references(() => savingsTransfer.id, { onDelete: "cascade" }),
     /** Why it is neither (fixed cost, own account, regular income). */
     skipReason: text("skip_reason"),
     createdAt: timestamps.createdAt,
@@ -200,5 +229,6 @@ export const bookedLine = sqliteTable(
     index("booked_line_date_idx").on(table.date),
     index("booked_line_spending_idx").on(table.spendingId),
     index("booked_line_one_off_income_idx").on(table.oneOffIncomeId),
+    index("booked_line_savings_transfer_idx").on(table.savingsTransferId),
   ],
 );

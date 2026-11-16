@@ -37,6 +37,7 @@ export function SavingsForm({
 }) {
   const id = useId();
   const [name, setName] = useState(account?.name ?? "");
+  const [iban, setIban] = useState(account?.iban ?? "");
   const [balance, setBalance] = useState(
     account?.balance ? amountText(account.balance.amount) : "",
   );
@@ -96,7 +97,13 @@ export function SavingsForm({
     const scenarioIds = scenarios.every((s) => inScenarios.includes(s.id))
       ? null
       : inScenarios;
-    const fields = { name, until: until || null, withdrawals, scenarioIds };
+    const fields = {
+      name,
+      iban: iban.trim() || null,
+      until: until || null,
+      withdrawals,
+      scenarioIds,
+    };
     startTransition(async () => {
       const response = account
         ? await saveSavingsAccount(account.id, fields, { amount, date })
@@ -122,6 +129,16 @@ export function SavingsForm({
             value={name}
             onChange={(event) => setName(event.target.value)}
             required
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-iban`}>IBAN (optioneel)</Label>
+          <Input
+            id={`${id}-iban`}
+            value={iban}
+            onChange={(event) => setIban(event.target.value)}
+            placeholder="NL91 ABNA 0417 1643 00"
+            autoCapitalize="characters"
           />
         </div>
         <div className="space-y-1">
@@ -182,6 +199,10 @@ export function SavingsForm({
       <div className="space-y-2">
         <p className="text-sm font-medium">
           Geplande uitgaven van deze rekening
+        </p>
+        <p className="text-muted-foreground text-xs">
+          Tellen alleen mee zolang ze na vandaag zijn; wat echt gebeurd is,
+          staat bij de overboekingen.
         </p>
         {rows.length === 0 && (
           <p className="text-muted-foreground text-sm">Nog geen.</p>

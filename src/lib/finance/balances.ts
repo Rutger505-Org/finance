@@ -9,7 +9,8 @@ import type { BalanceAccount } from "./schemas";
  * - income, refund (fixed-costs → current), transfer (current → fixed-costs), expense (paid from the current
  *   account), spending, oneOffIncome (money in that isn't a regular income): the current account
  * - transfer, charge (direct debit), refund: the fixed-costs account
- * - withdrawal: a savings account
+ * - fromSavings, toSavings: the current account's side of a savings transfer
+ * - fromCurrent, toCurrent: the savings account's side; withdrawal (planned, after today): a savings account
  */
 export type ChangeKind =
   | "income"
@@ -19,12 +20,16 @@ export type ChangeKind =
   | "charge"
   | "spending"
   | "oneOffIncome"
+  | "fromSavings"
+  | "toSavings"
+  | "fromCurrent"
+  | "toCurrent"
   | "withdrawal";
 
 /** A planned or booked change of one account's balance. */
 export interface Change {
   day: Day;
-  /** HH:MM, spendings and one-off incomes only. Without one it counts before any checkpoint that day. */
+  /** HH:MM, spendings, one-off incomes and savings transfers only. Without one it counts before any checkpoint that day. */
   time: string | null;
   name: string;
   /** Signed: negative is money out. */
@@ -61,9 +66,9 @@ export interface Reconciliation {
 const minutes = (time: string) =>
   Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
 /** Changes without a time sort first in their day, checkpoints without one last. */
-const changePosition = (change: Change) =>
+export const changePosition = (change: Pick<Change, "day" | "time">) =>
   change.day * 1441 + (change.time ? minutes(change.time) : 0);
-const checkpointPosition = (checkpoint: Checkpoint) =>
+export const checkpointPosition = (checkpoint: Pick<Checkpoint, "day" | "time">) =>
   checkpoint.day * 1441 + (checkpoint.time ? minutes(checkpoint.time) : 1440);
 
 /** Planned changes of the current or fixed-costs account in (after, until]. */

@@ -23,10 +23,11 @@ export function GET(request: Request) {
     if ((input.account === "savings") !== (input.savingsAccountId !== undefined)) {
       throw new HttpError(400, "savingsAccountId is required for, and only for, account savings");
     }
-    const until = input.to ? parseDay(input.to) : today();
+    const now = today();
+    const until = input.to ? parseDay(input.to) : now;
     const from = input.from ? parseDay(input.from) : until - 30;
     if (from > until || until - from > 3660) throw new HttpError(400, "from must be before to, at most 10 years apart");
-    const result = repository.reconcile(input.account, input.savingsAccountId ?? null, from, until);
+    const result = repository.reconcile(input.account, input.savingsAccountId ?? null, from, until, now);
     return json({
       expected: euros(result.expected),
       checkpoints: result.checkpoints.map((c) => ({

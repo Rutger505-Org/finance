@@ -55,13 +55,19 @@ const kindLabels: Record<
     expense: "Vaste lasten",
     spending: "Uitgaven",
     oneOffIncome: "Losse inkomsten",
+    fromSavings: "Van spaarrekening",
+    toSavings: "Naar spaarrekening",
   },
   fixed: {
     transfer: "Van lopende rekening",
     charge: "Incasso's",
     refund: "Terug naar lopende rekening",
   },
-  savings: { withdrawal: "Geplande uitgaven" },
+  savings: {
+    toCurrent: "Naar lopende rekening",
+    fromCurrent: "Van lopende rekening",
+    withdrawal: "Geplande uitgaven",
+  },
 };
 
 function groupSince(
@@ -121,6 +127,7 @@ export default function SaldoPage() {
       account.account,
       account.savingsAccountId,
       from,
+      today,
       today,
     );
     return {

@@ -136,6 +136,20 @@ export type ScenarioDto = z.infer<typeof scenarioDto>;
 /** YYYY-MM */
 export const yearMonth = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, { message: "Expected a month as YYYY-MM" });
 
+/** Uppercase without spaces; Dutch and other IBANs, checked with the mod-97 checksum. */
+export const iban = z
+  .string()
+  .transform((value) => value.replace(/\s+/g, "").toUpperCase())
+  .refine(isValidIban, { message: "Geen geldig IBAN" });
+
+export function isValidIban(value: string): boolean {
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(value)) return false;
+  const digits = (value.slice(4) + value.slice(0, 4)).replace(/[A-Z]/g, (c) => String(c.charCodeAt(0) - 55));
+  let remainder = 0;
+  for (const digit of digits) remainder = (remainder * 10 + Number(digit)) % 97;
+  return remainder === 1;
+}
+
 /** A one-off payment the savings must still cover (e.g. a yearly fee). */
 export const savingsWithdrawal = z.strictObject({ name, amount: euros, date: isoDate, note: note.optional() });
 export type SavingsWithdrawal = z.infer<typeof savingsWithdrawal>;
@@ -146,6 +160,8 @@ export type SavingsWithdrawal = z.infer<typeof savingsWithdrawal>;
  */
 const savingsAccountFields = {
   name,
+  /** Its own IBAN, to recognise transfers in the current account's statement. */
+  iban: iban.nullable(),
   until: yearMonth.nullable(),
   withdrawals: z.array(savingsWithdrawal).max(100),
   /** Scenarios whose monthly budget the spread counts in; null for all. */
@@ -154,6 +170,7 @@ const savingsAccountFields = {
 };
 export const savingsAccountCreate = z.strictObject({
   ...savingsAccountFields,
+  iban: savingsAccountFields.iban.optional(),
   until: savingsAccountFields.until.optional(),
   withdrawals: savingsAccountFields.withdrawals.optional(),
   scenarioIds: scenarioIdsSchema.optional(),
@@ -165,10 +182,44 @@ export const savingsAccountPatch = z.strictObject(savingsAccountFields).partial(
 export type SavingsAccountCreate = z.infer<typeof savingsAccountCreate>;
 export type SavingsAccountPatch = z.infer<typeof savingsAccountPatch>;
 
-/** What the summary of a savings account needs: its balance on `date`, the withdrawals and `until`. */
+/** A savings account by id, name (case-insensitive) or IBAN. */
+export const savingsAccountRef = z.union([id, z.string().trim().min(1).max(100)]);
+export type SavingsAccountRef = z.infer<typeof savingsAccountRef>;
+
+const transferDescription = z.string().trim().min(1).max(200);
+/** Positive: savings → current, negative: current → savings. */
+const transferAmount = signedEuros.refine((value) => value !== 0, { message: "Bedrag mag geen 0 zijn" });
+
+/** Real money moved between a savings account and the current account, as on the current account's statement. */
+const savingsTransferFields = {
+  savingsAccountId: id,
+  date: isoDate,
+  /** Time on `date`, null when unknown; ordered against checkpoints like a spending's. */
+  time: clockTime.nullable(),
+  amount: transferAmount,
+  description: transferDescription,
+  note,
+};
+export const savingsTransferCreate = z.strictObject({
+  ...savingsTransferFields,
+  /** Defaults to today. */
+  date: isoDate.optional(),
+  time: clockTime.nullable().optional(),
+  note: note.optional(),
+});
+export const savingsTransferDto = z.strictObject({ id, ...savingsTransferFields });
+export const savingsTransferFilter = z.strictObject({
+  savingsAccountId: z.coerce.number().pipe(id).optional(),
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+});
+export type SavingsTransferCreate = z.infer<typeof savingsTransferCreate>;
+export type SavingsTransferDto = z.infer<typeof savingsTransferDto>;
+export type SavingsTransferFilter = z.infer<typeof savingsTransferFilter>;
+
+/** What the summary of a savings account needs: its current balance, the withdrawals and `until`. */
 export interface Savings {
   balance: number;
-  date: string;
   until: string;
   withdrawals: SavingsWithdrawal[];
 }
@@ -239,6 +290,8 @@ export const savingsAccountDto = z.strictObject({
   ...savingsAccountFields,
   /** Latest checkpoint, null without one. */
   balance: z.strictObject({ amount: signedEuros, date: isoDate, time: clockTime.nullable() }).nullable(),
+  /** All its transfers, newest first. */
+  transfers: z.array(savingsTransferDto),
 });
 export type SavingsAccountDto = z.infer<typeof savingsAccountDto>;
 
@@ -265,20 +318,6 @@ export const outingDto = z.strictObject({ id, ...outingFields });
 export type OutingCreate = z.infer<typeof outingCreate>;
 export type OutingPatch = z.infer<typeof outingPatch>;
 export type OutingDto = z.infer<typeof outingDto>;
-
-/** Uppercase without spaces; Dutch and other IBANs, checked with the mod-97 checksum. */
-export const iban = z
-  .string()
-  .transform((value) => value.replace(/\s+/g, "").toUpperCase())
-  .refine(isValidIban, { message: "Geen geldig IBAN" });
-
-export function isValidIban(value: string): boolean {
-  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(value)) return false;
-  const digits = (value.slice(4) + value.slice(0, 4)).replace(/[A-Z]/g, (c) => String(c.charCodeAt(0) - 55));
-  let remainder = 0;
-  for (const digit of digits) remainder = (remainder * 10 + Number(digit)) % 97;
-  return remainder === 1;
-}
 
 /**
  * What a counterparty's statement lines usually are: `spending` (always a spending, default category),
@@ -404,10 +443,25 @@ const bookedLineInput = z.strictObject({
   amount: signedEuros,
 });
 
-/** One or more statement lines that become one spending or one-off income, or are skipped with a reason. */
+/**
+ * Current-account lines that are a transfer to or from a savings account. `amount` defaults to the sum of the
+ * lines (bank sign: money in = from savings), `date` to the first line's.
+ */
+export const savingsBooking = z.strictObject({
+  account: savingsAccountRef,
+  description: transferDescription,
+  note: note.optional(),
+  date: isoDate.optional(),
+  time: clockTime.nullable().optional(),
+  amount: transferAmount.optional(),
+});
+export type SavingsBooking = z.infer<typeof savingsBooking>;
+
+/** One or more statement lines that become one spending, one-off income or savings transfer, or are skipped. */
 export const booking = z.union([
   z.strictObject({ lines: z.array(bookedLineInput).min(1), spending: spendingCreate }),
   z.strictObject({ lines: z.array(bookedLineInput).min(1), income: oneOffIncomeCreate }),
+  z.strictObject({ lines: z.array(bookedLineInput).min(1), savings: savingsBooking }),
   z.strictObject({ lines: z.array(bookedLineInput).min(1), skip: z.string().trim().min(1).max(200) }),
 ]);
 export const bookings = z
@@ -426,8 +480,17 @@ export const bookedLineDto = z.strictObject({
   amount: signedEuros,
   spendingId: id.nullable(),
   oneOffIncomeId: id.nullable(),
+  savingsTransferId: id.nullable(),
   skip: z.string().nullable(),
 });
+/** Turn a skipped line (an own-account transfer) into a savings transfer; `description` defaults to the skip reason. */
+export const convertToSavings = z.strictObject({
+  key: z.string().min(1).max(2000),
+  account: savingsAccountRef,
+  description: transferDescription.optional(),
+  note: note.optional(),
+});
+export type ConvertToSavings = z.infer<typeof convertToSavings>;
 export const bookedLineFilter = z.strictObject({ from: isoDate.optional(), to: isoDate.optional() });
 export type Booking = z.infer<typeof booking>;
 export type BookedLineDto = z.infer<typeof bookedLineDto>;

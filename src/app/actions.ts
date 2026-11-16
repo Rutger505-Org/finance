@@ -16,6 +16,7 @@ import {
   outingPatch,
   savingsAccountCreate,
   savingsAccountPatch,
+  savingsTransferCreate,
   scenarioCreate,
   scenarioPatch,
   settingsSchema,
@@ -86,7 +87,7 @@ export async function addBalance(input: unknown) {
     const saved = repository.createBalance(balanceCreate.parse(input), today());
     const day = parseDay(saved.date);
     const checked = repository
-      .reconcile(saved.account, saved.savingsAccountId, day, day)
+      .reconcile(saved.account, saved.savingsAccountId, day, day, today())
       .checkpoints.find((checkpoint) => checkpoint.id === saved.id);
     if (checked?.difference != null) {
       message =
@@ -210,4 +211,12 @@ export async function saveSavingsAccount(
 
 export async function deleteSavingsAccount(id: number) {
   return run(() => repository.deleteSavingsAccount(id));
+}
+
+export async function addSavingsTransfer(input: unknown) {
+  return run(() => repository.createSavingsTransfer(savingsTransferCreate.parse(input), today()), "Overboeking opgeslagen");
+}
+
+export async function deleteSavingsTransfer(id: number) {
+  return run(() => repository.deleteSavingsTransfer(id));
 }

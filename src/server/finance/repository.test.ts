@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { parseDay } from "@/lib/finance/dates";
-import { counterpartyCreate } from "@/lib/finance/schemas";
+import { counterpartyCreate, savingsAccountCreate } from "@/lib/finance/schemas";
 import * as schema from "@/server/db/schema";
 import { HttpError } from "@/server/http-error";
 import { drizzle } from "drizzle-orm/bun-sqlite";
@@ -103,6 +103,111 @@ describe("repository", () => {
     expect(repository.listBalances({ account: "savings" })).toEqual([]);
   });
 
+  test("latest checkpoint: without a time is the end of the day", () => {
+    const account = repository.createSavingsAccount({ name: "Buffer", balance: { amount: 100, date: "2026-10-20" } }, today);
+    repository.createBalance({ account: "savings", savingsAccountId: account.id, amount: 300, date: "2026-10-20", time: "10:00" }, today);
+    expect(repository.getSavingsAccount(account.id).balance).toEqual({ amount: 100, date: "2026-10-20", time: null });
+    expect(repository.listBalances({ account: "savings" }).map((b) => b.amount)).toEqual([100, 300]);
+  });
+
+  test("savings accounts: IBAN normalized and unique", () => {
+    const buffer = repository.createSavingsAccount(savingsAccountCreate.parse({ name: "Buffer", iban: "nl91 abna 0417 1643 00" }), today);
+    expect(buffer.iban).toBe("NL91ABNA0417164300");
+    expect(() =>
+      repository.createSavingsAccount(savingsAccountCreate.parse({ name: "Vakantie", iban: "NL91ABNA0417164300" }), today),
+    ).toThrow("IBAN");
+    const holiday = repository.createSavingsAccount({ name: "Vakantie" }, today);
+    expect(() => repository.updateSavingsAccount(holiday.id, { iban: "NL91ABNA0417164300" })).toThrow("IBAN");
+    expect(repository.updateSavingsAccount(buffer.id, { iban: null }).iban).toBeNull();
+  });
+
+  test("bookings: savings transfers on both accounts, once; deleting one frees its lines", () => {
+    const buffer = repository.createSavingsAccount(
+      { name: "Buffer", iban: "NL91ABNA0417164300", balance: { amount: 1000, date: "2026-10-01" } },
+      today,
+    );
+    repository.createBalance({ account: "current", amount: 100, date: "2026-10-01" }, today);
+    const line = (key: string, date: string, amount: number) => ({ key, date, amount });
+    const [fromSavings, toSavings] = repository.book(
+      [
+        { lines: [line("a", "2026-10-05", 60), line("b", "2026-10-05", 40)], savings: { account: "buffer", description: "Opnemen" } },
+        { lines: [line("c", "2026-10-10", -30)], savings: { account: "NL91 ABNA 0417 1643 00", description: "Sparen", time: "12:00" } },
+      ],
+      today,
+    );
+    expect(fromSavings).toEqual({
+      id: fromSavings!.id,
+      savingsAccountId: buffer.id,
+      date: "2026-10-05",
+      time: null,
+      amount: 100,
+      description: "Opnemen",
+      note: null,
+    });
+    expect(toSavings).toMatchObject({ amount: -30, time: "12:00" });
+    expect(repository.listBookedLines().map((l) => l.savingsTransferId)).toEqual([fromSavings!.id, fromSavings!.id, toSavings!.id]);
+    expect(() => repository.book([{ lines: [line("a", "2026-10-05", 60)], skip: "x" }], today)).toThrow("Al geboekt");
+    expect(() => repository.book([{ lines: [line("d", "2026-10-05", 1)], savings: { account: "Vakantie", description: "x" } }], today)).toThrow(
+      "[0].savings.account",
+    );
+    expect(() => repository.deleteBookedLine("c")).toThrow("savings transfer");
+
+    const current = repository.reconcile("current", null, parseDay("2026-10-01"), today, today);
+    expect(current.expected).toBe(10000 + 10000 - 3000);
+    expect(current.since.map((c) => [c.kind, c.name, c.amount])).toEqual([
+      ["fromSavings", "Buffer: Opnemen", 10000],
+      ["toSavings", "Buffer: Sparen", -3000],
+    ]);
+    const savings = repository.reconcile("savings", buffer.id, parseDay("2026-10-01"), today, today);
+    expect(savings.expected).toBe(100000 - 10000 + 3000);
+    expect(savings.since.map((c) => c.kind)).toEqual(["toCurrent", "fromCurrent"]);
+    expect(repository.getSavingsAccount(buffer.id).transfers.map((t) => t.amount)).toEqual([-30, 100]);
+
+    repository.deleteSavingsTransfer(fromSavings!.id);
+    expect(repository.listBookedLines().map((l) => l.key)).toEqual(["c"]);
+    repository.deleteSavingsAccount(buffer.id);
+    expect(repository.listBookedLines()).toEqual([]);
+    expect(repository.listSavingsTransfers()).toEqual([]);
+  });
+
+  test("a skipped line converts to a savings transfer", () => {
+    const buffer = repository.createSavingsAccount({ name: "Buffer" }, today);
+    const line = (key: string, amount: number) => ({ key, date: "2026-10-03", amount });
+    repository.book(
+      [
+        { lines: [line("own", -100)], skip: "Eigen rekening" },
+        { lines: [line("beer", -5)], spending: { description: "Bier", amount: 5 } },
+      ],
+      today,
+    );
+    expect(() => repository.convertToSavings({ key: "beer", account: buffer.id })).toThrow("Only a skipped line");
+    expect(() => repository.convertToSavings({ key: "nope", account: buffer.id })).toThrow("not booked");
+    expect(() => repository.convertToSavings({ key: "own", account: 99 })).toThrow("account");
+    const transfer = repository.convertToSavings({ key: "own", account: "Buffer" });
+    expect(transfer).toMatchObject({ savingsAccountId: buffer.id, date: "2026-10-03", time: null, amount: -100, description: "Eigen rekening" });
+    expect(repository.listBookedLines().find((l) => l.key === "own")).toMatchObject({ skip: null, savingsTransferId: transfer.id });
+    expect(() => repository.convertToSavings({ key: "own", account: buffer.id })).toThrow("Only a skipped line");
+  });
+
+  test("reconcile a savings account: planned withdrawals only after today", () => {
+    const buffer = repository.createSavingsAccount(
+      {
+        name: "Vakantie",
+        withdrawals: [
+          { name: "Geweest", amount: 100, date: "2026-10-10" },
+          { name: "Vandaag", amount: 100, date: "2026-10-25" },
+          { name: "Straks", amount: 100, date: "2026-11-10" },
+        ],
+        balance: { amount: 1000, date: "2026-10-01" },
+      },
+      today,
+    );
+    expect(repository.reconcile("savings", buffer.id, today, today, today).expected).toBe(100000);
+    const ahead = repository.reconcile("savings", buffer.id, today, parseDay("2026-11-30"), today);
+    expect(ahead.since.map((c) => c.name)).toEqual(["Straks"]);
+    expect(ahead.expected).toBe(90000);
+  });
+
   test("checkpoints can't be in the future", () => {
     expect(() => repository.createBalance({ account: "current", amount: 1, date: "2026-10-26" }, today)).toThrow(HttpError);
   });
@@ -113,7 +218,7 @@ describe("repository", () => {
     repository.createSpending({ date: "2026-10-21", time: "20:00", amount: 10, description: "Drinken" }, today);
     repository.createBalance({ account: "current", amount: 100, date: "2026-10-19" }, today);
     repository.createBalance({ account: "current", amount: 560, date: "2026-10-21", time: "18:00" }, today);
-    const result = repository.reconcile("current", null, parseDay("2026-10-18"), today);
+    const result = repository.reconcile("current", null, parseDay("2026-10-18"), today, today);
     expect(result.checkpoints.map((c) => [c.amount, c.expected])).toEqual([
       [10000, null],
       [56000, 57000],
@@ -267,9 +372,9 @@ describe("repository", () => {
     expect(beer).toMatchObject({ amount: 5.5, date: "2026-10-31" });
     expect(gym).toBeNull();
     expect(repository.listBookedLines({ from: "2026-11-01" })).toEqual([
-      { key: "a", date: "2026-11-01", amount: -3.5, spendingId: beer!.id, oneOffIncomeId: null, skip: null },
-      { key: "b", date: "2026-11-01", amount: -2, spendingId: beer!.id, oneOffIncomeId: null, skip: null },
-      { key: "c", date: "2026-11-01", amount: -30, spendingId: null, oneOffIncomeId: null, skip: "Vaste lasten" },
+      { key: "a", date: "2026-11-01", amount: -3.5, spendingId: beer!.id, oneOffIncomeId: null, savingsTransferId: null, skip: null },
+      { key: "b", date: "2026-11-01", amount: -2, spendingId: beer!.id, oneOffIncomeId: null, savingsTransferId: null, skip: null },
+      { key: "c", date: "2026-11-01", amount: -30, spendingId: null, oneOffIncomeId: null, savingsTransferId: null, skip: "Vaste lasten" },
     ]);
 
     // All or nothing: one booked line rejects the whole batch.
@@ -324,6 +429,7 @@ describe("repository", () => {
       amount: 40,
       spendingId: null,
       oneOffIncomeId: bike!.id,
+      savingsTransferId: null,
       skip: null,
     });
 
@@ -370,7 +476,7 @@ describe("repository", () => {
     repository.createOneOffIncome({ date: "2026-10-21", time: "17:00", amount: 5, description: "Boek verkocht" }, today);
     repository.createBalance({ account: "current", amount: 135, date: "2026-10-21", time: "18:00" }, today);
     repository.createOneOffIncome({ date: "2026-10-21", time: "19:00", amount: 25, description: "Bijdrage boodschappen" }, today);
-    const result = repository.reconcile("current", null, parseDay("2026-10-19"), today);
+    const result = repository.reconcile("current", null, parseDay("2026-10-19"), today, today);
     expect(result.checkpoints.map((c) => [c.amount, c.expected])).toEqual([
       [10000, null],
       [13500, 13500],
