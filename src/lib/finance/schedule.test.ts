@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { isoDay, parseDay } from "./dates";
-import { nextOccurrence, occurrencesBetween } from "./schedule";
+import { endedBefore, filterBounds, nextOccurrence, nextOccurrenceWithin, occurrencesBetween } from "./schedule";
 
 const days = (list: number[]) => list.map(isoDay);
 
@@ -43,4 +43,32 @@ test("nextOccurrence is strictly after", () => {
   const cycle = { type: "monthly", day: 24 } as const;
   expect(isoDay(nextOccurrence(cycle, parseDay("2026-10-24")))).toBe("2026-11-24");
   expect(isoDay(nextOccurrence(cycle, parseDay("2026-10-23")))).toBe("2026-10-24");
+});
+
+describe("bounds", () => {
+  const cycle = { type: "monthly", day: 15 } as const;
+  const bounds = { from: parseDay("2026-03-15"), until: parseDay("2026-05-15") };
+
+  test("filterBounds keeps days within from..until, both inclusive", () => {
+    const all = occurrencesBetween(cycle, parseDay("2026-01-01"), parseDay("2026-08-01"));
+    expect(days(filterBounds(all, bounds))).toEqual(["2026-03-15", "2026-04-15", "2026-05-15"]);
+  });
+
+  test("nextOccurrenceWithin starts at from", () => {
+    expect(isoDay(nextOccurrenceWithin(cycle, parseDay("2026-01-01"), bounds)!)).toBe("2026-03-15");
+  });
+
+  test("nextOccurrenceWithin is null after until", () => {
+    expect(nextOccurrenceWithin(cycle, parseDay("2026-05-15"), bounds)).toBeNull();
+  });
+
+  test("nextOccurrenceWithin without bounds is the plain next occurrence", () => {
+    expect(nextOccurrenceWithin(cycle, parseDay("2026-01-01"), {})).toBe(nextOccurrence(cycle, parseDay("2026-01-01")));
+  });
+
+  test("an item ends once until is before today; a future from still counts", () => {
+    expect(endedBefore(bounds, parseDay("2026-05-15"))).toBe(false);
+    expect(endedBefore(bounds, parseDay("2026-05-16"))).toBe(true);
+    expect(endedBefore({ from: parseDay("2030-01-01") }, parseDay("2026-01-01"))).toBe(false);
+  });
 });

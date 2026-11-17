@@ -5,6 +5,8 @@ import {
   configSchema,
   cycleSchema,
   euros,
+  expenseCreate,
+  expensePatch,
   formatIssues,
   oneOffIncomeCreate,
   rebook,
@@ -127,5 +129,16 @@ describe("schemas", () => {
       settingsSchema.safeParse({ transfers: [transfer, transfer] }).success,
     ).toBe(false);
     expect(categoryPatch.safeParse({ excluded: true }).success).toBe(true);
+  });
+});
+
+describe("expense bounds", () => {
+  const base = { name: "Telefoon", amount: 20, cycle: { type: "monthly", day: 10 }, account: "fixed" };
+  test("optional, nullable, from not after until", () => {
+    expect(expenseCreate.parse(base)).not.toHaveProperty("from");
+    expect(expenseCreate.safeParse({ ...base, from: "2026-01-01", until: "2026-01-01" }).success).toBe(true);
+    expect(expenseCreate.safeParse({ ...base, from: "2026-02-01", until: "2026-01-01" }).success).toBe(false);
+    expect(expensePatch.safeParse({ from: "2026-02-31" }).success).toBe(false);
+    expect(expensePatch.safeParse({ until: null }).success).toBe(true);
   });
 });

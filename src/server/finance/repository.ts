@@ -2,13 +2,14 @@ import { isoDay, type Day } from "@/lib/finance/dates";
 import { planChanges, reconcile, type Change, type PlanLine, type Reconciliation } from "@/lib/finance/balances";
 import {
   buildOverview,
+  dueDays,
   outflowDays,
   resolveTransfers,
   type Overview,
   type PlanInput,
   type TransferLine,
 } from "@/lib/finance/plan";
-import { occurrencesBetween } from "@/lib/finance/schedule";
+import { occurrencesBetween, withinBounds, type Bounds } from "@/lib/finance/schedule";
 import {
   defaultSettings,
   linkedIncomeIds,
@@ -114,11 +115,23 @@ function expenseDto(row: ExpenseRow): ExpenseDto {
     amount: toEuros(row.amount),
     cycle: row.cycle,
     account: row.account,
+    from: row.from,
+    until: row.until,
     active: row.active,
     scenarioIds: row.scenarioIds,
     note: row.note,
   };
 }
+
+/** An expense's ISO bounds as days. */
+const boundsOf = (row: { from: string | null; until: string | null }): Required<Bounds> => ({
+  from: row.from === null ? null : parseDay(row.from),
+  until: row.until === null ? null : parseDay(row.until),
+});
+
+/** "from 2026-01-01 until 2026-12-31", the set sides only. */
+const boundsLabel = (row: { from: string | null; until: string | null }) =>
+  [row.from && `from ${row.from}`, row.until && `until ${row.until}`].filter(Boolean).join(" ");
 
 function balanceDto(row: BalanceRow): BalanceDto {
   return {
@@ -376,7 +389,7 @@ export function createRepository(db: Db) {
       expenses: inScenario(
         db.select().from(expense).where(eq(expense.active, true)).orderBy(asc(expense.id)).all(),
         real,
-      ),
+      ).map((row) => ({ ...row, ...boundsOf(row) })),
       transfers: getSettings().transfers.map((transfer) => ({
         ...transfer,
         amount: typeof transfer.amount === "number" ? toCents(transfer.amount) : transfer.amount,
@@ -627,16 +640,24 @@ export function createRepository(db: Db) {
             `${path}.expenseId: expense ${plan.expenseId} (${item.name}) is charged to the fixed-costs account, not the current account`,
           );
         }
-        if (plan.kind === "expense") {
-          label = `a due day of expense ${plan.expenseId} (${item.name})`;
-          occurrences = (after, until) =>
-            occurrencesBetween(item.cycle, after, until);
-          moneyIn = false;
-        } else {
-          label = `a refund day (the day before a due day) of expense ${plan.expenseId} (${item.name})`;
-          occurrences = (after, until) => outflowDays(item, after, until);
-          moneyIn = true;
+        const unbounded = { ...item, from: null, until: null };
+        const days = plan.kind === "expense" ? dueDays : outflowDays;
+        if (!withinBounds(day, item) && days(unbounded, day - 1, day).includes(day)) {
+          const bounds = boundsLabel({
+            from: item.from == null ? null : isoDay(item.from),
+            until: item.until == null ? null : isoDay(item.until),
+          });
+          throw new HttpError(
+            400,
+            `${path}.date: ${plan.date} is outside expense ${plan.expenseId} (${item.name}), which runs ${bounds}`,
+          );
         }
+        label =
+          plan.kind === "expense"
+            ? `a due day of expense ${plan.expenseId} (${item.name})`
+            : `a refund day (the day before a due day) of expense ${plan.expenseId} (${item.name})`;
+        occurrences = (after, until) => days(item, after, until);
+        moneyIn = plan.kind === "refund";
         break;
       }
       case "transfer": {
@@ -880,6 +901,37 @@ export function createRepository(db: Db) {
   function lazyPlanInput(): () => PlanInput {
     let cached: PlanInput | undefined;
     return () => (cached ??= planInput());
+  }
+
+  /**
+   * New bounds of an expense may not leave out an occurrence that booked lines are linked to: their lines would
+   * lose their meaning, as with deleting it.
+   */
+  function assertBoundsKeepLinks(
+    target: Db | Tx,
+    id: number,
+    bounds: { from: string | null; until: string | null },
+    path = "",
+  ) {
+    const days = boundsOf(bounds);
+    const outside = target
+      .select({ kind: bookedLine.planKind, date: bookedLine.planDate })
+      .from(bookedLine)
+      .where(
+        and(
+          eq(bookedLine.planExpenseId, id),
+          inArray(bookedLine.planKind, ["expense", "refund"]),
+        ),
+      )
+      .all()
+      .filter((row) => row.date !== null && !withinBounds(parseDay(row.date), days));
+    if (outside.length) {
+      const dates = [...new Set(outside.map((row) => `${row.date} (${row.kind})`))].sort().join(", ");
+      throw new HttpError(
+        409,
+        `${path}Expense ${id} has booked lines linked to ${dates}, outside ${boundsLabel(bounds)}; widen the bounds or rebook those lines`,
+      );
+    }
   }
 
   /** Items with booked lines linked to them can't go: their lines would lose their meaning. */
@@ -1332,6 +1384,16 @@ export function createRepository(db: Db) {
     },
     updateExpense(id: number, patch: ExpensePatch): ExpenseDto {
       assertScenarios(patch.scenarioIds);
+      if (patch.from !== undefined || patch.until !== undefined) {
+        const current = getExpense(id);
+        const bounds = { from: patch.from ?? null, until: patch.until ?? null };
+        if (patch.from === undefined) bounds.from = current.from;
+        if (patch.until === undefined) bounds.until = current.until;
+        if (bounds.from !== null && bounds.until !== null && bounds.from > bounds.until) {
+          throw new HttpError(400, `until: ${bounds.until} is before from ${bounds.from}`);
+        }
+        assertBoundsKeepLinks(db, id, bounds);
+      }
       const row = db.update(expense).set(expenseValues(patch)).where(eq(expense.id, id)).returning().get();
       return row ? expenseDto(row) : notFound("Expense", id);
     },
@@ -1677,6 +1739,14 @@ export function createRepository(db: Db) {
           if (item.id !== undefined && !knownExpenses.has(item.id)) {
             throw new HttpError(400, `expenses[${index}].id: expense ${item.id} does not exist`);
           }
+          if (item.id !== undefined) {
+            assertBoundsKeepLinks(
+              tx,
+              item.id,
+              { from: item.from ?? null, until: item.until ?? null },
+              `expenses[${index}]: `,
+            );
+          }
         });
 
         const keepIncomes = config.incomes.flatMap((item) => item.id ?? []);
@@ -1719,6 +1789,8 @@ export function createRepository(db: Db) {
             amount: toCents(item.amount),
             cycle: item.cycle,
             account: item.account,
+            from: item.from ?? null,
+            until: item.until ?? null,
             active: item.active ?? true,
             scenarioIds: item.scenarioIds ?? null,
             note: item.note ?? null,

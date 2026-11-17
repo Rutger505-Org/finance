@@ -28,7 +28,7 @@ export function serializeOverview(o: Overview) {
         amount: euros(line.amount),
         reserved: euros(line.reserved),
         monthly: euros(line.monthly),
-        nextDue: isoDay(line.nextDue),
+        nextDue: line.nextDue === null ? null : isoDay(line.nextDue),
       })),
     },
     transfers: o.transfers.map((t) => ({

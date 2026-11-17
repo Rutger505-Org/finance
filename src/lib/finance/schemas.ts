@@ -93,6 +93,16 @@ const expenseFields = {
   amount: euros,
   cycle: cycleSchema,
   account: accountSchema,
+  from: isoDate
+    .nullable()
+    .describe(
+      "First day (inclusive) the expense runs; null = unbounded. Every planned movement whose own day is before it is left out: for an expense paid from the current account the refund the day before `from` is out, the payment on `from` in.",
+    ),
+  until: isoDate
+    .nullable()
+    .describe(
+      "Last day (inclusive) the expense runs; null = unbounded. Movements after it are left out; once it is before today the expense no longer counts in the monthly costs and auto transfers.",
+    ),
   active: z.boolean(),
   scenarioIds: scenarioIdsSchema,
   note,
@@ -111,13 +121,23 @@ export type IncomeCreate = z.infer<typeof incomeCreate>;
 export type IncomePatch = z.infer<typeof incomePatch>;
 export type IncomeDto = z.infer<typeof incomeDto>;
 
-export const expenseCreate = z.strictObject({
+/** `from` must not be after `until` (ISO dates compare as strings). */
+const boundsInOrder = (value: { from?: string | null; until?: string | null }, ctx: z.RefinementCtx) => {
+  if (value.from && value.until && value.from > value.until) {
+    ctx.addIssue({ code: "custom", message: "Vanaf moet op of voor tot en met liggen", path: ["until"] });
+  }
+};
+
+const expenseCreateFields = {
   ...expenseFields,
+  from: expenseFields.from.optional(),
+  until: expenseFields.until.optional(),
   active: expenseFields.active.optional(),
   scenarioIds: scenarioIdsSchema.optional(),
   note: note.optional(),
-});
-export const expensePatch = z.strictObject(expenseFields).partial();
+};
+export const expenseCreate = z.strictObject(expenseCreateFields).superRefine(boundsInOrder);
+export const expensePatch = z.strictObject(expenseFields).partial().superRefine(boundsInOrder);
 export const expenseDto = z.strictObject({ id, ...expenseFields });
 export type ExpenseCreate = z.infer<typeof expenseCreate>;
 export type ExpensePatch = z.infer<typeof expensePatch>;
@@ -574,7 +594,9 @@ export const configSchema = z
   .strictObject({
     settings: settingsSchema,
     incomes: z.array(z.strictObject({ id: id.optional(), ...incomeCreate.shape })),
-    expenses: z.array(z.strictObject({ id: id.optional(), ...expenseCreate.shape })),
+    expenses: z.array(
+      z.strictObject({ id: id.optional(), ...expenseCreateFields }).superRefine(boundsInOrder),
+    ),
   })
   .superRefine((config, ctx) => {
     uniqueIds(config.incomes, ctx, "incomes");

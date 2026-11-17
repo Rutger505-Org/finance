@@ -1,6 +1,6 @@
 import type { Day } from "./dates";
-import { movementsBetween, resolveTransfers, type PlanInput } from "./plan";
-import { occurrencesBetween } from "./schedule";
+import { dueDays, movementsBetween, resolveTransfers, type PlanInput } from "./plan";
+import { withinBounds } from "./schedule";
 import type { BalanceAccount } from "./schemas";
 
 /** All amounts in this module are cents. */
@@ -162,7 +162,7 @@ export function planChanges(
   if (account === "current") {
     for (const expense of input.expenses) {
       if (expense.account !== "current") continue;
-      for (const day of occurrencesBetween(expense.cycle, after, until)) {
+      for (const day of dueDays(expense, after, until)) {
         add(
           expense.id === undefined ? null : `expense:${expense.id}:${day}`,
           day,
@@ -222,17 +222,16 @@ function plannedAmount(
       const income = input.incomes.find((item) => item.id === link.incomeId);
       return income ? income.amount : null;
     }
-    case "expense": {
-      const expense = input.expenses.find(
-        (item) => item.id === link.expenseId && item.account === "current",
-      );
-      return expense ? -expense.amount : null;
-    }
+    case "expense":
     case "refund": {
       const expense = input.expenses.find(
-        (item) => item.id === link.expenseId && item.account === "current",
+        (item) =>
+          item.id === link.expenseId &&
+          item.account === "current" &&
+          withinBounds(link.day, item),
       );
-      return expense ? sign * expense.amount : null;
+      if (!expense) return null;
+      return link.kind === "expense" ? -expense.amount : sign * expense.amount;
     }
     case "transfer": {
       const transfer = resolveTransfers(input, link.day).find(

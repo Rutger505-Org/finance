@@ -85,6 +85,13 @@
       "when": 1794871328079,
       "tag": "0011_counterparty_handling_plan",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1794901721078,
+      "tag": "0012_expense_bounds",
+      "breakpoints": true
     }
   ]
 }

@@ -53,6 +53,29 @@ export function nextOccurrence(cycle: Cycle, after: Day): Day {
   return next;
 }
 
+/** Inclusive first and last day an item runs; null or missing = unbounded on that side. */
+export interface Bounds {
+  from?: Day | null;
+  until?: Day | null;
+}
+
+export const withinBounds = (day: Day, { from, until }: Bounds) =>
+  (from == null || day >= from) && (until == null || day <= until);
+
+/** The days that fall within the bounds; each day is checked on its own (a refund on its refund day). */
+export const filterBounds = (days: Day[], bounds: Bounds) =>
+  days.filter((day) => withinBounds(day, bounds));
+
+/** Ended before `today`: no longer counted in averages and transfers. A future `from` still counts. */
+export const endedBefore = ({ until }: Bounds, today: Day) => until != null && until < today;
+
+/** First occurrence strictly after `after` within the bounds; null when there is none (ended). */
+export function nextOccurrenceWithin(cycle: Cycle, after: Day, bounds: Bounds): Day | null {
+  const start = bounds.from == null ? after : Math.max(after, bounds.from - 1);
+  const next = occurrencesBetween(cycle, start, start + MAX_GAP)[0];
+  return next === undefined || !withinBounds(next, bounds) ? null : next;
+}
+
 /** Average number of occurrences per year. */
 export function cyclesPerYear(cycle: Cycle): number {
   switch (cycle.type) {

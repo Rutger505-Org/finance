@@ -7,11 +7,17 @@ import { repository } from "@/server/finance";
 
 const ANCHOR = "vaste-lastenrekening";
 
+/** Null: no due day left before the expense's end. */
+const nextLabel = (nextDue: Day | null, day: Day) =>
+  nextDue === null ? "gestopt" : relativeDate(nextDue, day);
+
 /** Required balance of the fixed-costs account on `day` (real scenario), reserved per expense, with date navigation via `?datum=`. */
 export function FixedAccountCard({ day, today }: { day: Day; today: Day }) {
   const overview = repository.overview(day);
   const expenses = [...overview.expenses].sort(
-    (a, b) => a.nextDue - b.nextDue || a.name.localeCompare(b.name),
+    (a, b) =>
+      (a.nextDue ?? Infinity) - (b.nextDue ?? Infinity) ||
+      a.name.localeCompare(b.name),
   );
 
   return (
@@ -60,7 +66,7 @@ export function FixedAccountCard({ day, today }: { day: Day; today: Day }) {
                     <div className="min-w-0">
                       <p className="font-medium">{expense.name}</p>
                       <p className="text-muted-foreground">
-                        {relativeDate(expense.nextDue, day)} ·{" "}
+                        {nextLabel(expense.nextDue, day)} ·{" "}
                         {money(expense.amount)}
                       </p>
                     </div>
@@ -100,7 +106,7 @@ export function FixedAccountCard({ day, today }: { day: Day; today: Day }) {
                         {money(expense.amount)}
                       </td>
                       <td className="py-2">
-                        {relativeDate(expense.nextDue, day)}
+                        {nextLabel(expense.nextDue, day)}
                       </td>
                     </tr>
                   ))}

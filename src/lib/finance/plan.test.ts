@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseDay } from "./dates";
-import { buildOverview, reserveNeeded, resolveTransfers, type PlanInput } from "./plan";
+import { buildOverview, movementsBetween, neededPerYear, outflowDays, reserveNeeded, resolveTransfers, type PlanInput } from "./plan";
 
 describe("reserveNeeded", () => {
   test("nothing needed when the next transfer comes before the charge", () => {
@@ -174,5 +174,62 @@ describe("several transfers", () => {
     expect(o.transfers.find((t) => t.name === "Na bijbaan")?.amount).toBe(0);
     expect(o.transfers.find((t) => t.name === "Na salaris")?.amount).toBe(16000);
     expect(o.warnings).toHaveLength(1);
+  });
+});
+
+describe("expense bounds", () => {
+  const d = parseDay;
+  const current = {
+    id: 1,
+    name: "Telefoon",
+    amount: 2000,
+    cycle: { type: "monthly", day: 10 },
+    account: "current",
+  } as const;
+
+  test("each movement is checked on its own day: no refund the day before from, the next one counts", () => {
+    const bounded = { ...current, from: d("2026-10-10") };
+    expect(outflowDays(bounded, d("2026-10-01"), d("2026-11-30"))).toEqual([d("2026-11-09")]);
+    expect(outflowDays({ ...bounded, from: d("2026-10-09") }, d("2026-10-01"), d("2026-10-31"))).toEqual([
+      d("2026-10-09"),
+    ]);
+  });
+
+  test("nothing after until", () => {
+    const fixed = { ...current, account: "fixed" as const, until: d("2026-11-10") };
+    const movements = movementsBetween(
+      { incomes: [], transfers: [], expenses: [fixed] },
+      d("2026-10-01"),
+      d("2027-01-31"),
+    );
+    expect(movements.map((m) => m.day)).toEqual([d("2026-10-10"), d("2026-11-10")]);
+  });
+
+  test("an expense whose until is before today counts nowhere in the averages; a future from does", () => {
+    const today = d("2026-10-25");
+    const ended = { ...current, until: d("2026-10-24") };
+    const future = { ...current, id: 2, name: "Hosting", amount: 500, from: d("2027-03-01") };
+    const plan: PlanInput = {
+      incomes: [],
+      transfers: [{ name: "Overboeking", cycle: { type: "monthly", day: 26 }, amount: "auto" }],
+      expenses: [ended, future],
+    };
+    expect(neededPerYear(plan, today)).toBe(500 * 12);
+    expect(neededPerYear(plan, d("2026-10-24"))).toBe(2500 * 12);
+    expect(resolveTransfers(plan, today)[0]?.amount).toBe(500);
+    const o = buildOverview(plan, today, { window: 31 });
+    expect(o.expenses.map((line) => line.name)).toEqual(["Hosting"]);
+    expect(o.monthly.costs).toBe(500);
+    expect(o.expenses[0]?.nextDue).toBe(d("2027-03-10"));
+  });
+
+  test("no next due day after until", () => {
+    const o = buildOverview(
+      { incomes: [], transfers: [], expenses: [{ ...current, until: d("2026-10-30") }] },
+      d("2026-10-25"),
+      { window: 0 },
+    );
+    expect(o.expenses[0]?.nextDue).toBeNull();
+    expect(o.expenses[0]?.reserved).toBe(0);
   });
 });

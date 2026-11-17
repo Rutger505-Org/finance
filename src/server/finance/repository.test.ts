@@ -55,6 +55,8 @@ describe("repository", () => {
       amount: 12.34,
       cycle: monthly(5),
       account: "fixed",
+      from: null,
+      until: null,
       active: true,
       scenarioIds: null,
       note: null,
@@ -465,6 +467,54 @@ describe("repository", () => {
     repository.deleteBookedLine("t");
     repository.putSettings({
       transfers: [{ name: "Anders", cycle: monthly(26), amount: 20 }],
+    });
+  });
+
+  test("expense bounds: links outside them are rejected, and new bounds can't drop linked occurrences", () => {
+    const phone = repository.createExpense({
+      name: "Telefoon",
+      amount: 20,
+      cycle: monthly(10),
+      account: "current",
+      from: "2026-10-10",
+      until: "2026-12-10",
+    });
+    expect(repository.getExpense(phone.id)).toMatchObject({ from: "2026-10-10", until: "2026-12-10" });
+    const book = (key: string, amount: number, plan: PlanBooking) =>
+      repository.book([{ lines: [{ key, date: plan.kind === "fixed" ? "2026-10-10" : plan.date, amount }], plan }], today);
+
+    // The refund the day before `from` never happened; the payment on `from` did.
+    expect(() => book("r", 20, { kind: "refund", expenseId: phone.id, date: "2026-10-09" })).toThrow(
+      `[0].plan.date: 2026-10-09 is outside expense ${phone.id} (Telefoon), which runs from 2026-10-10 until 2026-12-10`,
+    );
+    expect(() => book("p", -20, { kind: "expense", expenseId: phone.id, date: "2027-01-10" })).toThrow(
+      "is outside expense",
+    );
+    book("p", -20, { kind: "expense", expenseId: phone.id, date: "2026-10-10" });
+    book("r", 20, { kind: "refund", expenseId: phone.id, date: "2026-11-09" });
+
+    expect(() => repository.updateExpense(phone.id, { from: "2026-11-01" })).toThrow(
+      `Expense ${phone.id} has booked lines linked to 2026-10-10 (expense), outside from 2026-11-01 until 2026-12-10`,
+    );
+    expect(() => repository.updateExpense(phone.id, { until: "2026-11-08" })).toThrow(
+      "linked to 2026-11-09 (refund)",
+    );
+    expect(() => repository.updateExpense(phone.id, { from: "2027-01-01" })).toThrow(
+      "until: 2026-12-10 is before from 2027-01-01",
+    );
+    const config = repository.getConfig();
+    expect(() =>
+      repository.replaceConfig({
+        ...config,
+        expenses: config.expenses.map((item) => ({ ...item, until: "2026-10-31" })),
+      }),
+    ).toThrow("expenses[0]: Expense");
+    expect(repository.getExpense(phone.id).until).toBe("2026-12-10");
+
+    // Widening or clearing is fine.
+    expect(repository.updateExpense(phone.id, { from: null, until: "2026-11-09" })).toMatchObject({
+      from: null,
+      until: "2026-11-09",
     });
   });
 

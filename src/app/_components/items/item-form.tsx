@@ -33,6 +33,8 @@ export function ItemForm({
   const [amount, setAmount] = useState(item ? amountText(item.amount) : "");
   const [cycle, setCycle] = useState(cycleState(item?.cycle));
   const [account, setAccount] = useState<Account>(item && "account" in item ? item.account : "fixed");
+  const [from, setFrom] = useState(item && "from" in item ? (item.from ?? "") : "");
+  const [until, setUntil] = useState(item && "until" in item ? (item.until ?? "") : "");
   const [main, setMain] = useState(item && "main" in item ? item.main : false);
   const [active, setActive] = useState(item?.active ?? true);
   const [note, setNote] = useState(item?.note ?? "");
@@ -59,7 +61,7 @@ export function ItemForm({
       const response =
         kind === "income"
           ? await saveIncome(item?.id ?? null, { ...common, main })
-          : await saveExpense(item?.id ?? null, { ...common, account });
+          : await saveExpense(item?.id ?? null, { ...common, account, from: from || null, until: until || null });
       setResult(response);
       if (response.ok) onDone();
     });
@@ -85,6 +87,21 @@ export function ItemForm({
         </div>
       </div>
       <CycleFields value={cycle} onChange={setCycle} idPrefix={id} />
+      {kind === "expense" && (
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="space-y-1">
+            <Label htmlFor={`${id}-from`}>Vanaf (optioneel)</Label>
+            <Input id={`${id}-from`} type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={`${id}-until`}>Tot en met (optioneel)</Label>
+            <Input id={`${id}-until`} type="date" value={until} onChange={(event) => setUntil(event.target.value)} />
+          </div>
+          <p className="text-muted-foreground self-end text-xs sm:pb-2">
+            Betalingen en terugboekingen buiten deze dagen tellen niet mee.
+          </p>
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-3">
         {kind === "expense" && (
           <div className="space-y-1">

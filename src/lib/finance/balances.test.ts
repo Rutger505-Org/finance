@@ -107,6 +107,24 @@ describe("planChanges", () => {
     ]);
   });
 
+  test("bounds: the refund before from is left out, the payment on from counts, nothing after until", () => {
+    const bounded: PlanInput = {
+      ...input,
+      expenses: [{ ...input.expenses[0], from: d("2026-10-10"), until: d("2026-11-09") }],
+    };
+    const current = (after: string, until: string) =>
+      planChanges(bounded, "current", d(after), d(until))
+        .filter((c) => c.kind === "refund" || c.kind === "expense")
+        .map((c) => [c.kind, c.day]);
+    expect(current("2026-10-01", "2026-10-31")).toEqual([["expense", d("2026-10-10")]]);
+    expect(current("2026-11-01", "2026-12-31")).toEqual([["refund", d("2026-11-09")]]);
+    expect(
+      planChanges(bounded, "fixed", d("2026-10-01"), d("2026-12-31"))
+        .filter((c) => c.kind === "refund")
+        .map((c) => c.day),
+    ).toEqual([d("2026-11-09")]);
+  });
+
   test("fixed-costs account: transfer in, money back out", () => {
     const changes = planChanges(input, "fixed", after, until);
     expect(changes.map((c) => [c.kind, c.amount]).sort()).toEqual([

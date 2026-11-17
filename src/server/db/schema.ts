@@ -53,6 +53,9 @@ export const expense = sqliteTable("expense", {
   amount: integer("amount").notNull(),
   cycle: text("cycle", { mode: "json" }).$type<Cycle>().notNull(),
   account: text("account").$type<Account>().notNull(),
+  /** YYYY-MM-DD, inclusive; null = unbounded. Planned movements on days outside are left out. */
+  from: text("from_date"),
+  until: text("until_date"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   scenarioIds: scenarioIds(),
   note: text("note"),

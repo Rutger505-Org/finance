@@ -17,8 +17,8 @@ export interface ItemRow {
   amount: string;
   cycle: string;
   next: string;
-  /** ISO date of the next payment. */
-  nextDue: string;
+  /** ISO date of the next payment; null when it has ended. */
+  nextDue: string | null;
   monthly: string;
   monthlyEuros: number;
   detail?: string;
@@ -26,13 +26,16 @@ export interface ItemRow {
 
 type Sort = "next" | "monthly-desc" | "monthly-asc" | "name";
 
+/** Ended items (no next payment) sort last. */
+const byNext = (a: ItemRow, b: ItemRow) =>
+  (a.nextDue ?? "~").localeCompare(b.nextDue ?? "~");
+
 const sorters: Record<Sort, (a: ItemRow, b: ItemRow) => number> = {
-  next: (a, b) =>
-    a.nextDue.localeCompare(b.nextDue) || b.monthlyEuros - a.monthlyEuros,
+  next: (a, b) => byNext(a, b) || b.monthlyEuros - a.monthlyEuros,
   "monthly-desc": (a, b) =>
-    b.monthlyEuros - a.monthlyEuros || a.nextDue.localeCompare(b.nextDue),
+    b.monthlyEuros - a.monthlyEuros || byNext(a, b),
   "monthly-asc": (a, b) =>
-    a.monthlyEuros - b.monthlyEuros || a.nextDue.localeCompare(b.nextDue),
+    a.monthlyEuros - b.monthlyEuros || byNext(a, b),
   name: (a, b) => a.item.name.localeCompare(b.item.name, "nl"),
 };
 
@@ -68,7 +71,9 @@ export function ItemsSection({
   const [until, setUntil] = useState("");
   const shown = useMemo(
     () =>
-      rows.filter((row) => !until || row.nextDue <= until).sort(sorters[sort]),
+      rows.filter(
+        (row) => !until || (row.nextDue !== null && row.nextDue <= until),
+      ).sort(sorters[sort]),
     [rows, sort, until],
   );
   const shownMonthly = shown

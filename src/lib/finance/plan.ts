@@ -1,5 +1,12 @@
 import type { Day } from "./dates";
-import { cyclesPerYear, nextOccurrence, occurrencesBetween } from "./schedule";
+import {
+  cyclesPerYear,
+  endedBefore,
+  filterBounds,
+  nextOccurrence,
+  nextOccurrenceWithin,
+  occurrencesBetween,
+} from "./schedule";
 import type { Account, Cycle } from "./schemas";
 
 /** Look this far ahead so every yearly expense is covered at least once. */
@@ -20,6 +27,9 @@ export interface PlanExpense {
   amount: number;
   cycle: Cycle;
   account: Account;
+  /** Inclusive bounds; every movement whose own day falls outside is left out. Null = unbounded. */
+  from?: Day | null;
+  until?: Day | null;
 }
 
 export interface PlanTransfer {
@@ -60,7 +70,8 @@ export interface ExpenseLine {
   reserved: number;
   /** Average per month. */
   monthly: number;
-  nextDue: Day;
+  /** Null when no due day is left before `until`. */
+  nextDue: Day | null;
 }
 
 /**
@@ -146,9 +157,16 @@ export function reserveNeeded(
 
 const perYear = (amount: number, cycle: Cycle) => amount * cyclesPerYear(cycle);
 
-/** What the transfers must cover per year: every active expense. */
-export function neededPerYear(input: Pick<PlanInput, "expenses">): number {
-  return input.expenses.reduce((total, expense) => total + perYear(expense.amount, expense.cycle), 0);
+/** Expenses that still count in averages and transfers on `today`: not ended (a future `from` still counts). */
+export const runningExpenses = (expenses: PlanExpense[], today: Day) =>
+  expenses.filter((expense) => !endedBefore(expense, today));
+
+/** What the transfers must cover per year: every active expense that hasn't ended before `today`. */
+export function neededPerYear(input: Pick<PlanInput, "expenses">, today: Day): number {
+  return runningExpenses(input.expenses, today).reduce(
+    (total, expense) => total + perYear(expense.amount, expense.cycle),
+    0,
+  );
 }
 
 /**
@@ -171,7 +189,7 @@ export function resolveTransfers(input: PlanInput, today: Day): TransferLine[] {
   const covered = lines.reduce((total, line) => total + perYear(line.amount, line.cycle), 0);
   const autos = lines.filter((line) => line.source === "auto");
   const autoPerYear = autos.reduce((total, line) => total + cyclesPerYear(line.cycle), 0);
-  const rest = Math.max(0, neededPerYear(input) - covered);
+  const rest = Math.max(0, neededPerYear(input, today) - covered);
   const auto = autoPerYear > 0 ? Math.ceil(rest / autoPerYear) : 0;
   for (const line of autos) line.amount = auto;
   return lines;
@@ -180,12 +198,20 @@ export function resolveTransfers(input: PlanInput, today: Day): TransferLine[] {
 /**
  * Days in (after, until] on which an expense's money leaves the fixed-costs
  * account: the due date for a direct debit, the day before for an expense paid
- * from the current account (the bank moves it back a day early).
+ * from the current account (the bank moves it back a day early). Days outside the expense's bounds are left
+ * out, each checked on its own: a refund the day before `from` is out, the payment on `from` in.
  */
 export function outflowDays(expense: PlanExpense, after: Day, until: Day): Day[] {
-  if (expense.account === "fixed") return occurrencesBetween(expense.cycle, after, until);
-  return occurrencesBetween(expense.cycle, after + 1, until + 1).map((day) => day - 1);
+  const days =
+    expense.account === "fixed"
+      ? occurrencesBetween(expense.cycle, after, until)
+      : occurrencesBetween(expense.cycle, after + 1, until + 1).map((day) => day - 1);
+  return filterBounds(days, expense);
 }
+
+/** Due days of an expense in (after, until] within its bounds. */
+export const dueDays = (expense: PlanExpense, after: Day, until: Day): Day[] =>
+  filterBounds(occurrencesBetween(expense.cycle, after, until), expense);
 
 /** Every planned movement in (after, until], sorted by day. */
 export function movementsBetween(input: PlanInput, after: Day, until: Day): Movement[] {
@@ -228,7 +254,7 @@ export function buildOverview(input: PlanInput, today: Day, options: OverviewOpt
   const horizon = today + HORIZON_DAYS;
   const transfers = resolveTransfers(input, today);
   const transferredPerYear = transfers.reduce((total, t) => total + perYear(t.amount, t.cycle), 0);
-  const needed = neededPerYear(input);
+  const needed = neededPerYear(input, today);
   // Every transfer carries the same fraction of each expense as of all
   // transferred money; anything above the need is buffer.
   const share = (amount: number) => (transferredPerYear > 0 ? amount / transferredPerYear : 0);
@@ -236,7 +262,8 @@ export function buildOverview(input: PlanInput, today: Day, options: OverviewOpt
     occurrencesBetween(t.cycle, today, horizon).map((day) => ({ day, fraction: share(t.amount) })),
   );
 
-  const expenses = input.expenses.map((expense): ExpenseLine => {
+  // An expense that ended before today has nothing left to reserve or average.
+  const expenses = runningExpenses(input.expenses, today).map((expense): ExpenseLine => {
     const yearly = perYear(expense.amount, expense.cycle);
     const charges = outflowDays(expense, today, horizon);
     const shares = transferDays.map(({ day, fraction }) => ({ day, share: yearly * fraction }));
@@ -247,7 +274,7 @@ export function buildOverview(input: PlanInput, today: Day, options: OverviewOpt
       amount: expense.amount,
       monthly: yearly / 12,
       reserved: Math.round(reserveNeeded(charges, shares, expense.amount)),
-      nextDue: nextOccurrence(expense.cycle, today - 1),
+      nextDue: nextOccurrenceWithin(expense.cycle, today - 1, expense),
     };
   });
 

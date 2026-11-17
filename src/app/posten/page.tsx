@@ -3,7 +3,7 @@ import {
   ItemsSection,
   type ItemRow,
 } from "@/app/_components/items/items-section";
-import { itemRow, monthlySlices } from "@/app/_components/items/rows";
+import { itemRow, monthlySlices, perMonth } from "@/app/_components/items/rows";
 import { ScenarioBar } from "@/app/_components/items/scenario-bar";
 import { TransfersCard } from "@/app/_components/items/transfers-card";
 import { PieChart } from "@/components/pie-chart";
@@ -16,8 +16,6 @@ import {
 } from "@/components/ui/card";
 import { isValidIsoDate, isoDay, parseDay, type Day } from "@/lib/finance/dates";
 import { inScenario, savingsPerMonth } from "@/lib/finance/savings";
-import { cyclesPerYear } from "@/lib/finance/schedule";
-import type { Cycle } from "@/lib/finance/schemas";
 import { moneyEuros } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { today as getToday, repository } from "@/server/finance";
@@ -28,14 +26,6 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Posten" };
-
-const perMonth = (items: { amount: number; cycle: Cycle; active: boolean }[]) =>
-  items
-    .filter((item) => item.active)
-    .reduce(
-      (total, item) => total + (item.amount * cyclesPerYear(item.cycle)) / 12,
-      0,
-    );
 
 /** Incomes and fixed costs of the selected scenario on one page, with what's left per month, the transfers and the fixed-costs account (`?datum=`). */
 export default async function PostenPage({
@@ -71,7 +61,7 @@ export default async function PostenPage({
           <CardContent>
             <PieChart
               title="Verdeling inkomsten per maand"
-              slices={monthlySlices(incomes)}
+              slices={monthlySlices(incomes, today)}
             />
           </CardContent>
         </Card>
@@ -82,7 +72,7 @@ export default async function PostenPage({
           <CardContent>
             <PieChart
               title="Verdeling vaste lasten per maand"
-              slices={monthlySlices(expenses)}
+              slices={monthlySlices(expenses, today)}
             />
           </CardContent>
         </Card>
@@ -133,7 +123,7 @@ function MonthlyCard({
   const expenses = repository.listExpenses();
   const accounts = repository.listSavingsAccounts();
   const left = (id: number) =>
-    perMonth(inScenario(incomes, id)) - perMonth(inScenario(expenses, id));
+    perMonth(inScenario(incomes, id), today) - perMonth(inScenario(expenses, id), today);
   const spendable = (id: number) =>
     left(id) + (savingsPerMonth(accounts, id, today) ?? 0);
   const own = left(scenarioId);
@@ -143,10 +133,10 @@ function MonthlyCard({
       ? spendable(scenarioId) - spendable(realId)
       : null;
   const lines: { label: string; value: number; strong?: boolean }[] = [
-    { label: "Inkomsten", value: perMonth(inScenario(incomes, scenarioId)) },
+    { label: "Inkomsten", value: perMonth(inScenario(incomes, scenarioId), today) },
     {
       label: "Vaste lasten",
-      value: -perMonth(inScenario(expenses, scenarioId)),
+      value: -perMonth(inScenario(expenses, scenarioId), today),
     },
     { label: "Over", value: own, strong: savings === null },
   ];
