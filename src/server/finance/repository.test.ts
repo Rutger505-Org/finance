@@ -426,6 +426,16 @@ describe("repository", () => {
       date: "2026-10-09",
     });
 
+    // A reversal (refunded incasso) may link the same occurrence, as long as the total still goes the right way.
+    const due = { kind: "expense", expenseId: phone.id, date: "2026-10-10" } as const;
+    const bookLine = (key: string, amount: number) =>
+      repository.book([{ lines: [{ key, date: "2026-10-12", amount }], plan: due }], today);
+    bookLine("paid", -20);
+    expect(bookLine("reversed", 20)).toEqual([null]);
+    expect(() => bookLine("too-much", 5)).toThrow(
+      "with the lines already linked this expense adds up to 5, but it is money out (negative)",
+    );
+
     // Linked items can't go; deactivating is fine.
     expect(() => repository.deleteExpense(phone.id)).toThrow(
       "has booked lines linked",

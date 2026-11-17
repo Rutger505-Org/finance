@@ -590,7 +590,7 @@ export function createRepository(db: Db) {
    */
   function assertPlan(
     plan: PlanBooking,
-    lines: { amount: number }[],
+    lines: { key: string; amount: number }[],
     path: string,
     input: PlanInput,
   ) {
@@ -668,13 +668,43 @@ export function createRepository(db: Db) {
         `${path}.date: ${plan.date} is not ${label}; nearest: ${nearest.map(isoDay).join(", ") || "none"}`,
       );
     }
-    lines.forEach((line, index) => {
-      if (moneyIn ? line.amount > 0 : line.amount < 0) return;
+    // A line against the direction (a refunded incasso) is fine as long as the occurrence, together with the
+    // lines already linked to it, still goes the planned way.
+    const fits = (cents: number) => (moneyIn ? cents > 0 : cents < 0);
+    const keys = new Set(lines.map((line) => line.key));
+    const columns = planColumns(plan);
+    const linked = db
+      .select({ key: bookedLine.key, amount: bookedLine.amount })
+      .from(bookedLine)
+      .where(
+        and(
+          eq(bookedLine.planKind, plan.kind),
+          eq(bookedLine.planDate, plan.date),
+          plan.kind === "income"
+            ? eq(bookedLine.planIncomeId, plan.incomeId)
+            : plan.kind === "transfer"
+              ? eq(bookedLine.planTransfer, plan.transfer)
+              : eq(bookedLine.planExpenseId, columns.planExpenseId!),
+        ),
+      )
+      .all()
+      .filter((row) => !keys.has(row.key))
+      .map((row) => row.amount);
+    const amounts = [...lines.map((line) => toCents(line.amount)), ...linked];
+    if (!amounts.some(fits)) {
+      const index = lines.findIndex((line) => !fits(toCents(line.amount)));
       throw new HttpError(
         400,
-        `lines[${index}].amount: ${line.amount} doesn't fit ${plan.kind}, which is money ${moneyIn ? "in (positive)" : "out (negative)"}`,
+        `lines[${index}].amount: ${lines[index].amount} doesn't fit ${plan.kind}, which is money ${moneyIn ? "in (positive)" : "out (negative)"}`,
       );
-    });
+    }
+    const total = amounts.reduce((sum, cents) => sum + cents, 0);
+    if (moneyIn ? total < 0 : total > 0) {
+      throw new HttpError(
+        400,
+        `lines: with the lines already linked this ${plan.kind} adds up to ${toEuros(total)}, but it is money ${moneyIn ? "in (positive)" : "out (negative)"}`,
+      );
+    }
   }
 
   type BookingLine = Booking["lines"][number];
