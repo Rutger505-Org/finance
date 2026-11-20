@@ -77,6 +77,43 @@ describe("reconcile", () => {
     expect(result.since.map((c) => c.amount)).toEqual([-300]);
   });
 
+  test("a change without a time moves after a timed checkpoint that day when that makes it match", () => {
+    const result = reconcile(
+      [
+        { id: 1, day: d("2026-10-01"), time: null, amount: 10000 },
+        { id: 2, day: d("2026-10-02"), time: "13:00", amount: 9500 },
+      ],
+      [
+        spending("2026-10-02", "10:00", 500),
+        spending("2026-10-02", null, 1000),
+        spending("2026-10-02", "16:00", 300),
+      ],
+      d("2026-10-01"),
+      d("2026-10-02"),
+    );
+    expect(result.checkpoints.map((c) => [c.expected, c.difference])).toEqual([
+      [null, null],
+      [9500, 0],
+    ]);
+    expect(result.since.map((c) => c.amount)).toEqual([-1000, -300]);
+    expect(result.expected).toBe(8200);
+  });
+
+  test("of several changes without a time, only the ones that fit move after the checkpoint", () => {
+    const result = reconcile(
+      [
+        { id: 1, day: d("2026-10-01"), time: null, amount: 10000 },
+        { id: 2, day: d("2026-10-02"), time: "13:00", amount: 9800 },
+      ],
+      [spending("2026-10-02", null, 200), spending("2026-10-02", null, 700)],
+      d("2026-10-01"),
+      d("2026-10-02"),
+    );
+    expect(result.checkpoints[1].difference).toBe(0);
+    expect(result.since.map((c) => c.amount)).toEqual([-700]);
+    expect(result.expected).toBe(9100);
+  });
+
   test("checkpoints after `until` are ignored", () => {
     const result = reconcile(
       [{ id: 1, day: d("2026-10-05"), time: null, amount: 100 }],

@@ -69,7 +69,10 @@ export function occurrenceKey(link: PlanLink): string | null {
 /** A planned or booked change of one account's balance. */
 export interface Change {
   day: Day;
-  /** HH:MM, spendings, one-off incomes and savings transfers only. Without one it counts before any checkpoint that day. */
+  /**
+   * HH:MM, spendings, one-off incomes and savings transfers only. Without one it's unknown where it falls against a
+   * checkpoint with a time that day: see `reconcile`.
+   */
   time: string | null;
   name: string;
   /** Signed: negative is money out. */
@@ -114,7 +117,7 @@ export interface Reconciliation {
 
 const minutes = (time: string) =>
   Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
-/** Changes without a time sort first in their day, checkpoints without one last. */
+/** Changes without a time sort first in their day (unless `reconcile` moves them), checkpoints without one last. */
 export const changePosition = (change: Pick<Change, "day" | "time">) =>
   change.day * 1441 + (change.time ? minutes(change.time) : 0);
 export const checkpointPosition = (checkpoint: Pick<Checkpoint, "day" | "time">) =>
@@ -251,9 +254,17 @@ export const accountLabel: Record<BalanceAccount, string> = {
   savings: "Spaarrekening",
 };
 
+/** Above this many placements to try for one day, changes without a time just stay at the start of it. */
+const MAX_PLACEMENTS = 4096;
+
 /**
  * Walks an account's checkpoints and changes in order: each checkpoint is compared with what the balance should
  * have been since the one before, then becomes the new starting point.
+ *
+ * A change without a time on a day with a timed checkpoint may have happened before or after it (bank lines
+ * without a time, planned occurrences). Per day, oldest first, each such change is placed in the slot (start of
+ * the day or right after one of that day's timed checkpoints) that makes the most of that day's checkpoints
+ * match; on a tie the one moving the least wins, so with nothing to go on they stay at the start of the day.
  */
 export function reconcile(
   checkpoints: Checkpoint[],
@@ -261,12 +272,47 @@ export function reconcile(
   from: Day,
   until: Day,
 ): Reconciliation {
-  const sortedCheckpoints = [...checkpoints].sort(
-    (a, b) => checkpointPosition(a) - checkpointPosition(b) || a.id - b.id,
-  );
-  const sortedChanges = changes
-    .filter((change) => change.day <= until)
-    .sort((a, b) => changePosition(a) - changePosition(b));
+  const sortedCheckpoints = [...checkpoints]
+    .filter((checkpoint) => checkpoint.day <= until)
+    .sort((a, b) => checkpointPosition(a) - checkpointPosition(b) || a.id - b.id);
+  const relevantChanges = changes.filter((change) => change.day <= until);
+
+  const placed = new Map<Change, number>();
+  const timedByDay = new Map<Day, Checkpoint[]>();
+  for (const checkpoint of sortedCheckpoints)
+    if (checkpoint.time)
+      timedByDay.set(checkpoint.day, [...(timedByDay.get(checkpoint.day) ?? []), checkpoint]);
+  for (const [day, timed] of [...timedByDay].sort((a, b) => a[0] - b[0])) {
+    const floating = relevantChanges.filter((change) => change.day === day && !change.time);
+    const slots = [day * 1441, ...timed.map((checkpoint) => checkpointPosition(checkpoint) + 0.5)];
+    if (floating.length === 0 || slots.length ** floating.length > MAX_PLACEMENTS) continue;
+    let best: { placement: number[]; matching: number; moved: number } | null = null;
+    const placement = floating.map(() => 0);
+    for (;;) {
+      floating.forEach((change, i) => placed.set(change, slots[placement[i]]));
+      const matching = walk(sortedCheckpoints, relevantChanges, placed, from, until).checkpoints.filter(
+        (checked) => checked.day === day && checked.difference !== null && matches(checked.difference),
+      ).length;
+      const moved = placement.reduce((sum, slot) => sum + slot, 0);
+      if (!best || matching > best.matching || (matching === best.matching && moved < best.moved))
+        best = { placement: [...placement], matching, moved };
+      let i = floating.length - 1;
+      while (i >= 0 && placement[i] === slots.length - 1) placement[i--] = 0;
+      if (i < 0) break;
+      placement[i]++;
+    }
+    floating.forEach((change, i) => placed.set(change, slots[best.placement[i]]));
+  }
+  return walk(sortedCheckpoints, relevantChanges, placed, from, until);
+}
+
+function walk(
+  sortedCheckpoints: Checkpoint[],
+  changes: Change[],
+  placed: Map<Change, number>,
+  from: Day,
+  until: Day,
+): Reconciliation {
   type Event = {
     position: number;
     day: Day;
@@ -274,23 +320,20 @@ export function reconcile(
     checkpoint?: Checkpoint;
   };
   const events: Event[] = [
-    ...sortedChanges.map((change): Event => ({
-      position: changePosition(change),
+    ...changes.map((change): Event => ({
+      position: placed.get(change) ?? changePosition(change),
       day: change.day,
       change,
     })),
-    ...sortedCheckpoints
-      .filter((checkpoint) => checkpoint.day <= until)
-      .map((checkpoint): Event => ({
-        position: checkpointPosition(checkpoint),
-        day: checkpoint.day,
-        checkpoint,
-      })),
+    ...sortedCheckpoints.map((checkpoint): Event => ({
+      position: checkpointPosition(checkpoint),
+      day: checkpoint.day,
+      checkpoint,
+    })),
   ].sort(
     (a, b) =>
       a.position - b.position || (a.change ? 0 : 1) - (b.change ? 0 : 1),
   );
-
   let running: number | null = null;
   let since: Change[] = [];
   const checked: CheckedCheckpoint[] = [];
