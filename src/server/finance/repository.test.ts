@@ -797,6 +797,28 @@ describe("repository", () => {
     expect(repository.listSpendings({ outingId: party.id })).toHaveLength(2);
   });
 
+  test("a multi-day outing's last day needs a date before it, also merged on PATCH", () => {
+    const trip = repository.createOuting({ name: "Citytrip", date: "2026-10-17", endDate: "2026-10-21" });
+    expect(trip).toMatchObject({ date: "2026-10-17", endDate: "2026-10-21" });
+    expect(repository.createOuting({ name: "Festival", date: "2026-07-04", endDate: "2026-07-04" }).endDate).toBeNull();
+    expect(repository.createOuting({ name: "Kroegavond", date: "2026-07-04" }).endDate).toBeNull();
+    expect(() => repository.createOuting({ name: "Kamp", endDate: "2026-07-04" })).toThrow("endDate: needs a date");
+    expect(() => repository.createOuting({ name: "Kamp", date: "2026-07-04", endDate: "2026-07-01" })).toThrow(
+      "endDate: 2026-07-01 is before date 2026-07-04",
+    );
+
+    expect(() => repository.updateOuting(trip.id, { date: null })).toThrow("endDate: needs a date");
+    expect(() => repository.updateOuting(trip.id, { date: "2026-10-22" })).toThrow("is before date 2026-10-22");
+    expect(repository.updateOuting(trip.id, { date: "2026-10-18" })).toMatchObject({
+      date: "2026-10-18",
+      endDate: "2026-10-21",
+    });
+    expect(repository.updateOuting(trip.id, { endDate: "2026-10-18" }).endDate).toBeNull();
+    expect(repository.updateOuting(trip.id, { endDate: "2026-10-20" }).endDate).toBe("2026-10-20");
+    expect(repository.updateOuting(trip.id, { name: "Citytrip!" })).toMatchObject({ endDate: "2026-10-20" });
+    expect(repository.updateOuting(trip.id, { date: null, endDate: null })).toMatchObject({ date: null, endDate: null });
+  });
+
   test("deleting an outing or category keeps its spendings", () => {
     const category = repository.createCategory({ name: "Tijdelijk" });
     const outing = repository.createOuting({ name: "Kroegavond" });

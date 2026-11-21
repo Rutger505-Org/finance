@@ -33,6 +33,19 @@ export const date = (day: Day): string => shortDate.format(toDate(day));
 export const dateCompact = (day: Day): string => compactDate.format(toDate(day));
 export const dateLong = (day: Day): string => longDate.format(toDate(day));
 
+const rangeShort = new Intl.DateTimeFormat("nl-NL", { day: "numeric", month: "short", timeZone: "UTC" });
+const rangeLong = new Intl.DateTimeFormat("nl-NL", {
+  weekday: "short",
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+/** "17–21 okt", "31 okt – 3 nov"; one day: "17 okt". */
+export const dateRange = (start: Day, end: Day): string => rangeShort.formatRange(toDate(start), toDate(end));
+/** "za 17 – wo 21 okt 2026"; one day: "za 17 okt 2026". */
+export const dateRangeLong = (start: Day, end: Day): string => rangeLong.formatRange(toDate(start), toDate(end));
+
 export function relativeDate(day: Day, today: Day): string {
   if (day === today) return "vandaag";
   if (day === today + 1) return "morgen";

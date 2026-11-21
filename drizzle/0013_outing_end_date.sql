@@ -1,0 +1,1 @@
+ALTER TABLE `outing` ADD `end_date` text;

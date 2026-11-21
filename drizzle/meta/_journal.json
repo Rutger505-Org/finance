@@ -92,6 +92,13 @@
       "when": 1794901721078,
       "tag": "0012_expense_bounds",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1795293122271,
+      "tag": "0013_outing_end_date",
+      "breakpoints": true
     }
   ]
 }

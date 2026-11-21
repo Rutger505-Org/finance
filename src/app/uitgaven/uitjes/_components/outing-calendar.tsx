@@ -1,9 +1,9 @@
 import { MonthNav } from "@/app/_components/month-nav";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toYMD, type Day } from "@/lib/finance/dates";
-import { weekdayNames } from "@/lib/finance/insights";
-import { outingCalendar, outingHref, type CalendarOuting } from "@/lib/finance/outing-calendar";
-import { dateLong, money, moneyRounded, monthLabel } from "@/lib/format";
+import { weekday, weekdayNames } from "@/lib/finance/insights";
+import { outingCalendar, outingHref, type CalendarChip, type CalendarOuting } from "@/lib/finance/outing-calendar";
+import { dateLong, dateRange, money, moneyRounded, monthLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 
@@ -71,21 +71,8 @@ export function OutingCalendar({
                   >
                     {toYMD(cell.day).day}
                   </div>
-                  {cell.outings.map((outing) => (
-                    <Link
-                      key={outing.id}
-                      href={outingHref(outing.id)}
-                      title={`${outing.name}: ${money(outing.total)}`}
-                      aria-label={`${outing.name}, ${money(outing.total)}`}
-                      className={cn(
-                        "bg-background/80 hover:bg-muted flex min-w-0 items-baseline justify-between gap-1 rounded border px-1 py-0.5 text-[11px] leading-tight",
-                        !cell.inMonth && "opacity-70",
-                      )}
-                    >
-                      <span className="hidden truncate sm:inline">{outing.name}</span>
-                      <span className="shrink-0 font-medium tabular-nums sm:hidden">{moneyRounded(outing.total)}</span>
-                      <span className="hidden shrink-0 font-medium tabular-nums sm:inline">{money(outing.total)}</span>
-                    </Link>
+                  {cell.outings.map((chip) => (
+                    <OutingChip key={chip.id} chip={chip} day={cell.day} inMonth={cell.inMonth} />
                   ))}
                 </div>
               ))}
@@ -128,3 +115,53 @@ export function OutingCalendar({
   );
 }
 
+
+/**
+ * Half the space between two day cells (padding, border, half the gap): a multi-day chip reaches that far into it on
+ * each side that continues, so the neighbouring chips meet as one bar. Never across a week row.
+ */
+const reachLeft = "-ml-[calc(0.375rem+1px)]";
+const reachRight = "-mr-[calc(0.375rem+1px)]";
+
+/** One outing on one day; a multi-day one shows that day's amount, its name on the first day and each new week row. */
+function OutingChip({ chip, day, inMonth }: { chip: CalendarChip; day: Day; inMonth: boolean }) {
+  const multi = chip.end > chip.start;
+  const startsHere = day === chip.start;
+  const endsHere = day === chip.end;
+  const continuesLeft = multi && !startsHere && weekday(day) !== 0;
+  const continuesRight = multi && !endsHere && weekday(day) !== 6;
+  const showName = !multi || startsHere || weekday(day) === 0;
+  const label = multi
+    ? `${chip.name} (${dateRange(chip.start, chip.end)}): ${money(chip.amount)} deze dag · totaal ${money(chip.total)}`
+    : `${chip.name}: ${money(chip.amount)}`;
+  const quiet = multi && chip.amount === 0;
+
+  return (
+    <Link
+      href={outingHref(chip.id)}
+      title={label}
+      aria-label={label}
+      className={cn(
+        "flex min-w-0 items-baseline justify-between gap-1 border px-1 py-0.5 text-[11px] leading-tight",
+        multi ? "relative border-sky-500/40 bg-sky-500/15 hover:bg-sky-500/25" : "bg-background/80 hover:bg-muted rounded",
+        multi && (startsHere ? "rounded-l" : "rounded-l-none"),
+        multi && (endsHere ? "rounded-r" : "rounded-r-none"),
+        continuesLeft && cn(reachLeft, "border-l-0"),
+        continuesRight && cn(reachRight, "border-r-0"),
+        !inMonth && "opacity-70",
+      )}
+    >
+      <span className="hidden truncate sm:inline">
+        {showName ? chip.name : <span className="text-muted-foreground" aria-hidden>⋯</span>}
+      </span>
+      <span className={cn("shrink-0 font-medium tabular-nums sm:hidden", quiet && "text-muted-foreground font-normal")}>
+        {quiet ? "–" : moneyRounded(chip.amount)}
+      </span>
+      <span
+        className={cn("hidden shrink-0 font-medium tabular-nums sm:inline", quiet && "text-muted-foreground font-normal")}
+      >
+        {quiet ? "–" : money(chip.amount)}
+      </span>
+    </Link>
+  );
+}

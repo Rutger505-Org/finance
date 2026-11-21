@@ -1,14 +1,14 @@
 import { SpendingList } from "@/app/uitgaven/_components/spending-list";
 import type { Lookups } from "@/app/uitgaven/_components/spending-form";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { parseDay } from "@/lib/finance/dates";
 import { outingHref } from "@/lib/finance/outing-calendar";
 import { outingKey, trendHref } from "@/lib/finance/outing-trend";
 import type { SpendingDto } from "@/lib/finance/schemas";
 import { sum } from "@/lib/finance/spending";
-import { dateLong, money } from "@/lib/format";
+import { money } from "@/lib/format";
 import Link from "next/link";
 import { CategoryTotals } from "./category-totals";
+import { outingWhen } from "./outing-days";
 import { OutingActions } from "./outing-form";
 
 const cents = (euros: number) => Math.round(euros * 100);
@@ -50,7 +50,7 @@ export function OutingList({
               )}
             </CardTitle>
             <CardDescription className="first-letter:uppercase">
-              {[outing.date && dateLong(parseDay(outing.date)), outing.note].filter(Boolean).join(" · ") || "Geen datum"}
+              {[outingWhen(outing), outing.note].filter(Boolean).join(" · ") || "Geen datum"}
             </CardDescription>
           </div>
           <p className="text-xl font-semibold tabular-nums">{money(sum(lines))}</p>

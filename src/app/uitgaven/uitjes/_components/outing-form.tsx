@@ -12,6 +12,7 @@ export function OutingForm({ outing, onDone }: { outing?: OutingDto; onDone?: ()
   const id = useId();
   const [name, setName] = useState(outing?.name ?? "");
   const [date, setDate] = useState(outing?.date ?? "");
+  const [endDate, setEndDate] = useState(outing?.endDate ?? "");
   const [note, setNote] = useState(outing?.note ?? "");
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();
@@ -19,13 +20,20 @@ export function OutingForm({ outing, onDone }: { outing?: OutingDto; onDone?: ()
   function submit(event: React.FormEvent) {
     event.preventDefault();
     startTransition(async () => {
-      const response = await saveOuting(outing?.id ?? null, { name, date: date || null, note: note.trim() || null });
+      const response = await saveOuting(outing?.id ?? null, {
+        name,
+        date: date || null,
+        // Without a date there is no range: clearing the date clears the last day too.
+        endDate: (date && endDate) || null,
+        note: note.trim() || null,
+      });
       setResult(response.ok && !outing ? { ok: true, message: `Toegevoegd: ${name}` } : response);
       if (!response.ok) return;
       if (outing) onDone?.();
       else {
         setName("");
         setDate("");
+        setEndDate("");
         setNote("");
       }
     });
@@ -33,7 +41,7 @@ export function OutingForm({ outing, onDone }: { outing?: OutingDto; onDone?: ()
 
   return (
     <form onSubmit={submit} className="space-y-3 rounded-md border bg-muted/30 p-4">
-      <div className="grid gap-3 sm:grid-cols-[1fr_10rem]">
+      <div className="grid gap-3 sm:grid-cols-[1fr_10rem_10rem]">
         <div className="space-y-1">
           <Label htmlFor={`${id}-name`}>Naam</Label>
           <Input
@@ -47,6 +55,18 @@ export function OutingForm({ outing, onDone }: { outing?: OutingDto; onDone?: ()
         <div className="space-y-1">
           <Label htmlFor={`${id}-date`}>Datum</Label>
           <Input id={`${id}-date`} type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-end-date`}>T/m (meerdaags)</Label>
+          <Input
+            id={`${id}-end-date`}
+            type="date"
+            value={date ? endDate : ""}
+            min={date || undefined}
+            disabled={!date}
+            title={date ? "Laatste dag, leeg voor één dag" : "Kies eerst een datum"}
+            onChange={(event) => setEndDate(event.target.value)}
+          />
         </div>
       </div>
       <div className="space-y-1">

@@ -1,11 +1,61 @@
 import { dayFromYMD, daysInMonth, parseDay, type Day } from "./dates";
 import { startOfWeek } from "./insights";
 
-/** An outing with its total in cents (sum of all linked spendings, refunds negative). */
+/** A spending of an outing: its own date and the amount in cents (refunds negative). */
+export interface OutingSpending {
+  date: string;
+  amount: number;
+}
+
+/** Spendings with amounts in euros (the API's) as OutingSpendings, rounded per line like the outing totals. */
+export const outingSpendings = (spendings: { date: string; amount: number }[]): OutingSpending[] =>
+  spendings.map((s) => ({ date: s.date, amount: Math.round(s.amount * 100) }));
+
+/** An outing with its spendings; `endDate` (inclusive) makes it multi-day, null = a single day. */
 export interface CalendarOuting {
   id: number;
   name: string;
   date: string | null;
+  endDate: string | null;
+  spendings: OutingSpending[];
+}
+
+/** First and last day (inclusive) of an outing; equal for a single day. */
+export interface OutingRange {
+  start: Day;
+  end: Day;
+}
+
+/** The days an outing covers, null without a date. */
+export function outingRange(outing: { date: string | null; endDate: string | null }): OutingRange | null {
+  if (outing.date === null) return null;
+  const start = parseDay(outing.date);
+  return { start, end: outing.endDate === null ? start : Math.max(start, parseDay(outing.endDate)) };
+}
+
+export const rangeLength = (range: OutingRange): number => range.end - range.start + 1;
+
+/**
+ * Amount in cents per day of the range, every day present (0 without spendings). A spending before the first day
+ * (the ticket) counts on the first day, one after the last (a Tikkie afterwards) on the last day.
+ */
+export function amountsPerDay(range: OutingRange, spendings: OutingSpending[]): Map<Day, number> {
+  const days = new Map<Day, number>();
+  for (let day = range.start; day <= range.end; day++) days.set(day, 0);
+  for (const s of spendings) {
+    const day = Math.min(range.end, Math.max(range.start, parseDay(s.date)));
+    days.set(day, days.get(day)! + s.amount);
+  }
+  return days;
+}
+
+/** An outing on one day of the grid: `amount` is that day's share, `total` the whole outing's. */
+export interface CalendarChip {
+  id: number;
+  name: string;
+  start: Day;
+  end: Day;
+  amount: number;
   total: number;
 }
 
@@ -13,8 +63,8 @@ export interface CalendarDay {
   day: Day;
   /** False for the leading/trailing days of the adjacent months. */
   inMonth: boolean;
-  /** Outings dated that day, by id. */
-  outings: CalendarOuting[];
+  /** Outings covering that day: earliest start first, then the longest, then by id. */
+  outings: CalendarChip[];
   total: number;
   heat: number;
 }
@@ -29,11 +79,12 @@ export interface CalendarWeek {
 
 export interface OutingCalendar {
   weeks: CalendarWeek[];
-  /** Outings dated in the month itself (not the adjacent days). */
+  /** Amounts on the month's own days (not the adjacent ones). */
   total: number;
+  /** Outings whose range overlaps the month. */
   count: number;
-  /** Outings without a date, in input order. */
-  undated: CalendarOuting[];
+  /** Outings without a date, in input order, with their total. */
+  undated: { id: number; name: string; total: number }[];
 }
 
 export const HEAT_LEVELS = 4;
@@ -52,7 +103,8 @@ export function heatScale(totals: number[]): number {
 }
 
 /**
- * Whole Mon–Sun weeks covering `month` ("YYYY-MM"), with the outings per day and per week.
+ * Whole Mon–Sun weeks covering `month` ("YYYY-MM"), with the outings per day and per week. A multi-day outing is on
+ * every day of its range with that day's amount (see amountsPerDay); weeks add up all seven days.
  * Heat is relative to all dated outings so months compare: days to other days, weeks to other weeks (see heatScale).
  */
 export function outingCalendar(month: string, outings: CalendarOuting[]): OutingCalendar {
@@ -62,34 +114,40 @@ export function outingCalendar(month: string, outings: CalendarOuting[]): Outing
   const gridStart = startOfWeek(first);
   const gridEnd = startOfWeek(last) + 6;
 
-  const byDay = new Map<Day, CalendarOuting[]>();
-  const undated: CalendarOuting[] = [];
+  const byDay = new Map<Day, CalendarChip[]>();
+  const dayTotals = new Map<Day, number>();
+  const weekTotals = new Map<Day, number>();
+  const undated: OutingCalendar["undated"] = [];
   let total = 0;
   let count = 0;
   for (const outing of outings) {
-    if (outing.date === null) {
-      undated.push(outing);
+    const outingTotal = outing.spendings.reduce((acc, s) => acc + s.amount, 0);
+    const range = outingRange(outing);
+    if (range === null) {
+      undated.push({ id: outing.id, name: outing.name, total: outingTotal });
       continue;
     }
-    const day = parseDay(outing.date);
-    if (day >= first && day <= last) {
-      total += outing.total;
-      count++;
+    if (range.start <= last && range.end >= first) count++;
+    for (const [day, amount] of amountsPerDay(range, outing.spendings)) {
+      dayTotals.set(day, (dayTotals.get(day) ?? 0) + amount);
+      weekTotals.set(startOfWeek(day), (weekTotals.get(startOfWeek(day)) ?? 0) + amount);
+      if (day >= first && day <= last) total += amount;
+      if (day < gridStart || day > gridEnd) continue;
+      const chip = { id: outing.id, name: outing.name, ...range, amount, total: outingTotal };
+      byDay.set(day, [...(byDay.get(day) ?? []), chip]);
     }
-    if (day < gridStart || day > gridEnd) continue;
-    byDay.set(day, [...(byDay.get(day) ?? []), outing]);
   }
 
   const weeks: CalendarWeek[] = [];
   for (let start = gridStart; start <= gridEnd; start += 7) {
     const days = Array.from({ length: 7 }, (_, i): CalendarDay => {
       const day = start + i;
-      const list = (byDay.get(day) ?? []).sort((a, b) => a.id - b.id);
+      const list = (byDay.get(day) ?? []).sort((a, b) => a.start - b.start || b.end - a.end || a.id - b.id);
       return {
         day,
         inMonth: day >= first && day <= last,
         outings: list,
-        total: list.reduce((acc, o) => acc + o.total, 0),
+        total: list.reduce((acc, o) => acc + o.amount, 0),
         heat: 0,
       };
     });
@@ -101,14 +159,6 @@ export function outingCalendar(month: string, outings: CalendarOuting[]): Outing
     });
   }
 
-  const dayTotals = new Map<Day, number>();
-  const weekTotals = new Map<Day, number>();
-  for (const outing of outings) {
-    if (outing.date === null) continue;
-    const day = parseDay(outing.date);
-    dayTotals.set(day, (dayTotals.get(day) ?? 0) + outing.total);
-    weekTotals.set(startOfWeek(day), (weekTotals.get(startOfWeek(day)) ?? 0) + outing.total);
-  }
   const maxDay = heatScale([...dayTotals.values()]);
   const maxWeek = heatScale([...weekTotals.values()]);
   for (const week of weeks) {

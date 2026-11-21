@@ -177,7 +177,15 @@ function savingsAccountDto(
 }
 
 function outingDto(row: OutingRow): OutingDto {
-  return { id: row.id, name: row.name, date: row.date, note: row.note };
+  return { id: row.id, name: row.name, date: row.date, endDate: row.endDate, note: row.note };
+}
+
+/** The range as stored: `endDate` needs `date` and lies after it; equal to `date` becomes null (a single day). */
+function outingRange(date: string | null, endDate: string | null): { date: string | null; endDate: string | null } {
+  if (endDate === null) return { date, endDate };
+  if (date === null) throw new HttpError(400, "endDate: needs a date (clear endDate together with date)");
+  if (endDate < date) throw new HttpError(400, `endDate: ${endDate} is before date ${date}`);
+  return { date, endDate: endDate === date ? null : endDate };
 }
 
 type AliasRow = typeof counterpartyAlias.$inferSelect;
@@ -1046,13 +1054,25 @@ export function createRepository(db: Db) {
     createOuting(input: OutingCreate): OutingDto {
       const row = db
         .insert(outing)
-        .values({ name: input.name, date: input.date ?? null, note: input.note ?? null })
+        .values({ name: input.name, ...outingRange(input.date ?? null, input.endDate ?? null), note: input.note ?? null })
         .returning()
         .get();
       return outingDto(row);
     },
+    /** `date` and `endDate` are checked merged with the stored row. */
     updateOuting(id: number, patch: OutingPatch): OutingDto {
-      const row = db.update(outing).set(patch).where(eq(outing.id, id)).returning().get();
+      const values = { ...patch };
+      if (patch.date !== undefined || patch.endDate !== undefined) {
+        const current = getOuting(id);
+        Object.assign(
+          values,
+          outingRange(
+            patch.date === undefined ? current.date : patch.date,
+            patch.endDate === undefined ? current.endDate : patch.endDate,
+          ),
+        );
+      }
+      const row = db.update(outing).set(values).where(eq(outing.id, id)).returning().get();
       return row ? outingDto(row) : notFound("Outing", id);
     },
     /** Its spendings stay, without outing. */

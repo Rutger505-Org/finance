@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { isoDay } from "@/lib/finance/dates";
+import { outingSpendings } from "@/lib/finance/outing-calendar";
 import { outingTotals, recurringOutings, trendHref } from "@/lib/finance/outing-trend";
 import { isValidMonth } from "@/lib/finance/spending";
 import { cn } from "@/lib/utils";
@@ -77,7 +78,8 @@ export default async function OutingsPage({
             id: o.id,
             name: o.name,
             date: o.date,
-            total: totals.get(o.id) ?? 0,
+            endDate: o.endDate,
+            spendings: outingSpendings(linked.filter((s) => s.outingId === o.id)),
           }))}
         />
       )}

@@ -147,7 +147,7 @@ export function SpendingForm({
             {lookups.outings.map((o) => (
               <option key={o.id} value={o.id}>
                 {o.name}
-                {o.date && ` (${o.date})`}
+                {o.date && ` (${o.date}${o.endDate ? ` t/m ${o.endDate}` : ""})`}
               </option>
             ))}
           </Select>

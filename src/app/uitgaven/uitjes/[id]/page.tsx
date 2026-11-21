@@ -1,14 +1,15 @@
 import { SpendingList } from "@/app/uitgaven/_components/spending-list";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { isoDay, parseDay } from "@/lib/finance/dates";
+import { isoDay } from "@/lib/finance/dates";
 import { outingTotals, recurringOutings, trendHref, trendStats } from "@/lib/finance/outing-trend";
 import { sum } from "@/lib/finance/spending";
-import { dateLong, money } from "@/lib/format";
+import { money } from "@/lib/format";
 import { today as getToday, repository } from "@/server/finance";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CategoryTotals } from "../_components/category-totals";
+import { DayTotals, outingWhen } from "../_components/outing-days";
 import { OutingActions } from "../_components/outing-form";
 
 export const dynamic = "force-dynamic";
@@ -72,7 +73,7 @@ export default async function OutingPage({ params, searchParams }: Props) {
           <div className="space-y-1">
             <CardTitle className="text-xl">{outing.name}</CardTitle>
             <CardDescription className="first-letter:uppercase">
-              {outing.date ? dateLong(parseDay(outing.date)) : "Geen datum"}
+              {outingWhen(outing) ?? "Geen datum"}
             </CardDescription>
             {outing.note && <p className="text-sm">{outing.note}</p>}
           </div>
@@ -85,6 +86,7 @@ export default async function OutingPage({ params, searchParams }: Props) {
         </CardHeader>
         <CardContent className="space-y-4">
           <CategoryTotals lines={lines} categories={lookups.categories} />
+          <DayTotals outing={outing} spendings={spendings} />
           {group && average !== undefined && (
             <p className="text-sm">
               {difference === 0

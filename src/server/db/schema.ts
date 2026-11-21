@@ -143,8 +143,10 @@ export const category = sqliteTable("category", {
 export const outing = sqliteTable("outing", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
-  /** YYYY-MM-DD, the day it happens. */
+  /** YYYY-MM-DD, the day it happens (the first day of a multi-day one). */
   date: text("date"),
+  /** YYYY-MM-DD, inclusive last day of a multi-day outing (a trip); null = a single day. Always after `date`. */
+  endDate: text("end_date"),
   note: text("note"),
   ...timestamps,
 });

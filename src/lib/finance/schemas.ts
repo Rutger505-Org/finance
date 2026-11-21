@@ -339,16 +339,42 @@ export type CategoryDto = z.infer<typeof categoryDto>;
 
 const outingFields = {
   name,
-  /** The day it happens; spendings on other days (the ticket) can still belong to it. */
-  date: isoDate.nullable(),
+  date: isoDate
+    .nullable()
+    .describe(
+      "The day it happens, the first day of a multi-day outing; null = no date. Spendings on other days (the ticket) can still belong to it.",
+    ),
+  endDate: isoDate
+    .nullable()
+    .describe(
+      "Last day (inclusive) of a multi-day outing (a trip, a camp); null = a single day. Needs `date` and must be after it; equal to `date` is stored as null. Clearing `date` needs `endDate` cleared too.",
+    ),
   note,
 };
-export const outingCreate = z.strictObject({
-  ...outingFields,
-  date: outingFields.date.optional(),
-  note: note.optional(),
-});
-export const outingPatch = z.strictObject(outingFields).partial();
+
+/**
+ * `endDate` needs a `date` on or before it (ISO dates compare as strings). `requireDate`: a missing `date` counts as
+ * none (create); on PATCH the repository checks the merge with the stored row.
+ */
+const outingRangeInOrder =
+  (requireDate: boolean) => (value: { date?: string | null; endDate?: string | null }, ctx: z.RefinementCtx) => {
+    if (!value.endDate) return;
+    if (value.date === null || (requireDate && value.date === undefined)) {
+      ctx.addIssue({ code: "custom", message: "T/m kan alleen met een datum", path: ["endDate"] });
+    } else if (value.date && value.endDate < value.date) {
+      ctx.addIssue({ code: "custom", message: "T/m mag niet voor de datum liggen", path: ["endDate"] });
+    }
+  };
+
+export const outingCreate = z
+  .strictObject({
+    ...outingFields,
+    date: outingFields.date.optional(),
+    endDate: outingFields.endDate.optional(),
+    note: note.optional(),
+  })
+  .superRefine(outingRangeInOrder(true));
+export const outingPatch = z.strictObject(outingFields).partial().superRefine(outingRangeInOrder(false));
 export const outingDto = z.strictObject({ id, ...outingFields });
 export type OutingCreate = z.infer<typeof outingCreate>;
 export type OutingPatch = z.infer<typeof outingPatch>;
