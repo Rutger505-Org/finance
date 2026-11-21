@@ -3,6 +3,9 @@ import type { Cycle } from "@/lib/finance/schemas";
 
 const euro = new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" });
 export const money = (cents: number): string => euro.format(Math.round(cents) / 100);
+const euroRounded = new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR", minimumFractionDigits: 0, maximumFractionDigits: 0 });
+/** Whole euros, for tight spots: 1250 → "€ 13". */
+export const moneyRounded = (cents: number): string => euroRounded.format(Math.round(cents / 100));
 export const moneyEuros = (euros: number): string => euro.format(euros);
 
 const shortDate = new Intl.DateTimeFormat("nl-NL", {

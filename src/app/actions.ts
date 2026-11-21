@@ -31,6 +31,7 @@ import { repository, today } from "@/server/finance";
 import { HttpError } from "@/server/http-error";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { SCENARIO_COOKIE } from "@/server/scenario";
 import { ZodError } from "zod";
 
@@ -139,8 +140,11 @@ export async function saveOuting(id: number | null, input: unknown): Promise<Act
   return result.ok ? { ...result, id: saved } : result;
 }
 
-export async function deleteOuting(id: number) {
-  return run(() => repository.deleteOuting(id));
+/** With `redirectTo` (an outings page), navigates there once deleted, e.g. away from the outing's own page. */
+export async function deleteOuting(id: number, redirectTo?: string) {
+  const result = run(() => repository.deleteOuting(id));
+  if (result.ok && redirectTo?.startsWith("/uitgaven/uitjes")) redirect(redirectTo);
+  return result;
 }
 
 export async function saveCounterparty(id: number | null, input: unknown) {

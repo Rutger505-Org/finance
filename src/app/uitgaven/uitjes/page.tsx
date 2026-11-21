@@ -1,32 +1,43 @@
-import { SpendingList } from "@/app/uitgaven/_components/spending-list";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { isoDay, parseDay } from "@/lib/finance/dates";
-import { outingKey, outingTotals, recurringOutings, trendHref } from "@/lib/finance/outing-trend";
-import { sum, totalsBy } from "@/lib/finance/spending";
-import { dateLong, money } from "@/lib/format";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { isoDay } from "@/lib/finance/dates";
+import { outingTotals, recurringOutings, trendHref } from "@/lib/finance/outing-trend";
+import { isValidMonth } from "@/lib/finance/spending";
+import { cn } from "@/lib/utils";
 import { today as getToday, repository } from "@/server/finance";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { OutingActions, OutingForm } from "./_components/outing-form";
+import { OutingCalendar } from "./_components/outing-calendar";
+import { OutingForm } from "./_components/outing-form";
+import { OutingList } from "./_components/outing-list";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Uitjes" };
 
-const cents = (euros: number) => Math.round(euros * 100);
+const views = [
+  { href: "/uitgaven/uitjes", label: "Agenda", list: false },
+  { href: "/uitgaven/uitjes?weergave=lijst", label: "Lijst", list: true },
+];
 
-export default function OutingsPage() {
-  const today = isoDay(getToday());
+export default async function OutingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const { maand, weergave } = await searchParams;
+  const list = weergave === "lijst";
+  const todayDay = getToday();
+  const today = isoDay(todayDay);
+  const current = today.slice(0, 7);
+  const month = typeof maand === "string" && isValidMonth(maand) ? maand : current;
   const lookups = {
     categories: repository.listCategories(),
     outings: repository.listOutings(),
     counterparties: repository.listCounterparties(),
   };
   const linked = repository.listSpendings().filter((s) => s.outingId !== null);
-  const recurring = recurringOutings(lookups.outings, outingTotals(linked));
-  const recurringNames = new Set(recurring.map((g) => g.name));
-  const categoryName = (id: number | null) =>
-    id === null ? "Geen categorie" : (lookups.categories.find((c) => c.id === id)?.name ?? `#${id}`);
+  const totals = outingTotals(linked);
+  const recurring = recurringOutings(lookups.outings, totals);
 
   return (
     <>
@@ -62,54 +73,32 @@ export default function OutingsPage() {
         </Card>
       )}
 
-      {lookups.outings.length === 0 && <p className="text-muted-foreground text-sm">Nog geen uitjes.</p>}
+      <nav aria-label="Weergave" className="bg-muted inline-flex rounded-lg p-1 text-sm">
+        {views.map((view) => (
+          <Link
+            key={view.label}
+            href={view.href}
+            aria-current={view.list === list ? "page" : undefined}
+            className={cn(
+              "text-muted-foreground hover:text-foreground rounded-md px-3 py-1",
+              view.list === list && "bg-background text-foreground font-medium shadow-sm",
+            )}
+          >
+            {view.label}
+          </Link>
+        ))}
+      </nav>
 
-      {lookups.outings.map((outing) => {
-        const spendings = linked.filter((s) => s.outingId === outing.id);
-        const lines = spendings.map((s) => ({ ...s, amount: cents(s.amount) }));
-        return (
-          <Card key={outing.id}>
-            <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
-              <div className="space-y-1">
-                <CardTitle>
-                  {recurringNames.has(outingKey(outing.name)) ? (
-                    <Link href={trendHref(outing.name)} className="hover:underline" title="Bekijk het verloop">
-                      {outing.name}
-                    </Link>
-                  ) : (
-                    outing.name
-                  )}
-                </CardTitle>
-                <CardDescription className="first-letter:uppercase">
-                  {[outing.date && dateLong(parseDay(outing.date)), outing.note].filter(Boolean).join(" · ") ||
-                    "Geen datum"}
-                </CardDescription>
-              </div>
-              <p className="text-xl font-semibold tabular-nums">{money(sum(lines))}</p>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {lines.length > 0 && (
-                <ul className="flex flex-wrap gap-2 text-sm tabular-nums">
-                  {totalsBy(lines, "categoryId").map((t) => (
-                    <li key={String(t.id)} className="bg-muted rounded px-2 py-1">
-                      {categoryName(t.id)} <span className="font-medium">{money(t.amount)}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <details>
-                <summary className="cursor-pointer text-sm">
-                  {spendings.length} {spendings.length === 1 ? "uitgave" : "uitgaven"}
-                </summary>
-                <div className="mt-3">
-                  <SpendingList spendings={spendings} lookups={lookups} today={today} />
-                </div>
-              </details>
-              <OutingActions outing={outing} />
-            </CardContent>
-          </Card>
-        );
-      })}
+      {list ? (
+        <OutingList lookups={lookups} linked={linked} recurringNames={new Set(recurring.map((g) => g.name))} today={today} />
+      ) : (
+        <OutingCalendar
+          month={month}
+          current={current}
+          today={todayDay}
+          outings={lookups.outings.map((o) => ({ id: o.id, name: o.name, date: o.date, total: totals.get(o.id) ?? 0 }))}
+        />
+      )}
     </>
   );
 }

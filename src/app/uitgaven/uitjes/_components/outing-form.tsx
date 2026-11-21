@@ -68,14 +68,15 @@ export function OutingForm({ outing, onDone }: { outing?: OutingDto; onDone?: ()
   );
 }
 
-export function OutingActions({ outing }: { outing: OutingDto }) {
+/** `afterDelete`: page to go to once deleted (needed on the outing's own page). */
+export function OutingActions({ outing, afterDelete }: { outing: OutingDto; afterDelete?: string }) {
   const [editing, setEditing] = useState(false);
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();
 
   function remove() {
     if (!confirm(`"${outing.name}" verwijderen? De uitgaven blijven, zonder uitje.`)) return;
-    startTransition(async () => setResult(await deleteOuting(outing.id)));
+    startTransition(async () => setResult(await deleteOuting(outing.id, afterDelete)));
   }
 
   if (editing) return <OutingForm outing={outing} onDone={() => setEditing(false)} />;
