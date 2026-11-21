@@ -10,9 +10,9 @@ import Link from "next/link";
 /** Background per heat level (0 = none), warm and translucent so it reads in light and dark mode. */
 const heatClass = ["", "bg-orange-500/10", "bg-orange-500/20", "bg-orange-500/35", "bg-orange-500/50"];
 
-/** Week summary on the left, set apart by a divider; then the seven days. */
+/** Week summary on the left, set apart by extra spacing; then the seven days. */
 const row = "grid grid-cols-[3rem_minmax(0,1fr)] gap-1.5 sm:grid-cols-[6.5rem_minmax(0,1fr)] sm:gap-2";
-const days = "grid grid-cols-7 gap-1 border-l-2 pl-1.5 sm:pl-2";
+const days = "grid grid-cols-7 gap-1 pl-1.5 sm:pl-2";
 
 /** A month of outings as a Mon–Sun grid with day and week totals, tinted by amount. */
 export function OutingCalendar({
@@ -45,7 +45,7 @@ export function OutingCalendar({
         <div className="space-y-1">
           <div className={cn(row, "text-muted-foreground text-center text-xs")}>
             <div className="font-medium">Week</div>
-            <div className={cn(days, "border-transparent")}>
+            <div className={days}>
               {weekdayNames.map((name) => (
                 <div key={name} title={name}>
                   {name.slice(0, 2)}
