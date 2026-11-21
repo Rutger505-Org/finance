@@ -50,3 +50,9 @@ export function todayIn(timeZone: string): Day {
   }).format(new Date());
   return parseDay(formatted);
 }
+
+/** ISO 8601 week number (1–53) of the week `day` is in: the week belongs to the year of its Thursday. */
+export function isoWeek(day: Day): number {
+  const thursday = day - ((day - dayFromYMD(2024, 1, 1)) % 7 + 7) % 7 + 3;
+  return Math.floor((thursday - dayFromYMD(toYMD(thursday).year, 1, 1)) / 7) + 1;
+}

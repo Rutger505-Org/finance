@@ -1,6 +1,6 @@
 import { MonthNav } from "@/app/_components/month-nav";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { toYMD, type Day } from "@/lib/finance/dates";
+import { isoWeek, toYMD, type Day } from "@/lib/finance/dates";
 import { weekday, weekdayNames } from "@/lib/finance/insights";
 import { outingCalendar, outingHref, type CalendarChip, type CalendarOuting } from "@/lib/finance/outing-calendar";
 import { dateLong, dateRange, money, moneyRounded, monthLabel } from "@/lib/format";
@@ -10,7 +10,9 @@ import Link from "next/link";
 /** Background per heat level (0 = none), warm and translucent so it reads in light and dark mode. */
 const heatClass = ["", "bg-orange-500/10", "bg-orange-500/20", "bg-orange-500/35", "bg-orange-500/50"];
 
-const columns = "grid grid-cols-[repeat(7,minmax(0,1fr))_minmax(0,0.9fr)] gap-1";
+/** Week summary on the left, set apart by a divider; then the seven days. */
+const row = "grid grid-cols-[minmax(0,1fr)_minmax(0,7fr)] gap-1.5 sm:gap-2";
+const days = "grid grid-cols-7 gap-1 border-l-2 pl-1.5 sm:pl-2";
 
 /** A month of outings as a Mon–Sun grid with day and week totals, tinted by amount. */
 export function OutingCalendar({
@@ -41,56 +43,61 @@ export function OutingCalendar({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-1">
-          <div className={cn(columns, "text-muted-foreground text-center text-xs")}>
-            {weekdayNames.map((name) => (
-              <div key={name} title={name}>
-                {name.slice(0, 2)}
-              </div>
-            ))}
-            <div>Week</div>
-          </div>
-          {calendar.weeks.map((week) => (
-            <div key={week.start} className={columns}>
-              {week.days.map((cell) => (
-                <div
-                  key={cell.day}
-                  className={cn(
-                    "min-h-16 min-w-0 space-y-1 rounded-md border p-1 sm:min-h-24",
-                    !cell.inMonth && "bg-muted/40",
-                    heatClass[cell.heat],
-                  )}
-                  title={cell.total !== 0 ? `${dateLong(cell.day)}: ${money(cell.total)}` : undefined}
-                >
-                  <div
-                    className={cn(
-                      "flex size-5 items-center justify-center rounded-full text-xs tabular-nums",
-                      !cell.inMonth && "text-muted-foreground",
-                      cell.day === today && "bg-primary text-primary-foreground font-semibold",
-                    )}
-                    aria-current={cell.day === today ? "date" : undefined}
-                  >
-                    {toYMD(cell.day).day}
-                  </div>
-                  {cell.outings.map((chip) => (
-                    <OutingChip key={chip.id} chip={chip} day={cell.day} inMonth={cell.inMonth} />
-                  ))}
+          <div className={cn(row, "text-muted-foreground text-center text-xs")}>
+            <div className="font-medium">Week</div>
+            <div className={cn(days, "border-transparent")}>
+              {weekdayNames.map((name) => (
+                <div key={name} title={name}>
+                  {name.slice(0, 2)}
                 </div>
               ))}
+            </div>
+          </div>
+          {calendar.weeks.map((week) => (
+            <div key={week.start} className={row}>
               <div
                 className={cn(
-                  "flex min-w-0 items-center justify-center rounded-md border p-1 text-xs font-medium tabular-nums",
+                  "bg-muted/60 flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-md p-1 text-center tabular-nums",
                   heatClass[week.heat],
                 )}
-                title={`Week van ${dateLong(week.start)}`}
+                title={`Week ${isoWeek(week.start)}, vanaf ${dateLong(week.start)}: ${money(week.total)}`}
               >
+                <span className="text-muted-foreground text-[10px] leading-none sm:text-xs">wk {isoWeek(week.start)}</span>
                 {week.total === 0 ? (
-                  <span className="text-muted-foreground">–</span>
+                  <span className="text-muted-foreground text-xs">–</span>
                 ) : (
                   <>
-                    <span className="sm:hidden">{moneyRounded(week.total)}</span>
-                    <span className="hidden sm:inline">{money(week.total)}</span>
+                    <span className="text-xs font-semibold sm:hidden">{moneyRounded(week.total)}</span>
+                    <span className="hidden text-sm font-semibold sm:inline">{money(week.total)}</span>
                   </>
                 )}
+              </div>
+              <div className={days}>
+                {week.days.map((cell) => (
+                  <div
+                    key={cell.day}
+                    className={cn(
+                      "min-h-16 min-w-0 space-y-1 rounded-md border p-1 sm:min-h-24",
+                      !cell.inMonth && "bg-muted/40",
+                      heatClass[cell.heat],
+                    )}
+                    title={cell.total !== 0 ? `${dateLong(cell.day)}: ${money(cell.total)}` : undefined}
+                  >
+                    <div
+                      className={cn(
+                        "flex size-5 items-center justify-center rounded-full text-xs tabular-nums",
+                        !cell.inMonth && "text-muted-foreground",
+                        cell.day === today && "bg-primary text-primary-foreground font-semibold",
+                      )}
+                      aria-current={cell.day === today ? "date" : undefined}
+                    >
+                      {toYMD(cell.day).day}
+                    </div>
+                    {cell.outings.map((chip) => (
+                      <OutingChip key={chip.id} chip={chip} day={cell.day} inMonth={cell.inMonth} />
+                    ))}
+                  </div>
+                ))}
               </div>
             </div>
           ))}
