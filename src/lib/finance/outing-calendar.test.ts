@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { isoDay } from "./dates";
-import { heatLevel, outingCalendar, outingHref } from "./outing-calendar";
+import { heatLevel, heatScale, outingCalendar, outingHref } from "./outing-calendar";
 
 const outing = (id: number, date: string | null, total: number, name = `Uitje ${id}`) => ({ id, name, date, total });
 
@@ -55,7 +55,12 @@ describe("outing calendar", () => {
     expect(calendar.undated.map((o) => o.id)).toEqual([1]);
     expect(calendar.total).toBe(700);
     expect(calendar.count).toBe(1);
-    expect(calendar.weeks.flatMap((w) => w.days).flatMap((d) => d.outings).map((o) => o.id)).toEqual([2]);
+    expect(
+      calendar.weeks
+        .flatMap((w) => w.days)
+        .flatMap((d) => d.outings)
+        .map((o) => o.id),
+    ).toEqual([2]);
   });
 
   test("heat is relative to the busiest day and the busiest week", () => {
@@ -72,10 +77,23 @@ describe("outing calendar", () => {
     expect([w1.heat, w2.heat, w3.heat]).toEqual([4, 1, 0]);
   });
 
+  test("heat compares with outings outside the month", () => {
+    const calendar = outingCalendar("2026-06", [outing(1, "2026-06-02", 1000), outing(2, "2026-09-15", 4000)]);
+    expect(calendar.weeks[0].days[1].heat).toBe(1);
+    expect(calendar.weeks[0].heat).toBe(1);
+  });
+
   test("empty grid has no heat", () => {
     const calendar = outingCalendar("2026-06", []);
     expect(calendar.weeks.flatMap((w) => [w.heat, ...w.days.map((d) => d.heat)]).every((h) => h === 0)).toBe(true);
     expect(calendar.total).toBe(0);
+  });
+
+  test("heat scale is the 90th percentile of positive totals", () => {
+    expect(heatScale([])).toBe(0);
+    expect(heatScale([-100, 0])).toBe(0);
+    expect(heatScale([500])).toBe(500);
+    expect(heatScale([100, 200, 300, 400, 500, 600, 700, 800, 900, 10000])).toBe(900);
   });
 
   test("heat levels", () => {

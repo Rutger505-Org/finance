@@ -44,9 +44,16 @@ export function heatLevel(amount: number, max: number, levels = HEAT_LEVELS): nu
   return Math.min(levels, Math.max(1, Math.ceil((amount / max) * levels)));
 }
 
+/** Amount that gets the top heat level: the 90th percentile of the positive totals, so one festival doesn't pale the rest. */
+export function heatScale(totals: number[]): number {
+  const positive = totals.filter((t) => t > 0).sort((a, b) => a - b);
+  if (positive.length === 0) return 0;
+  return positive[Math.ceil(positive.length * 0.9) - 1];
+}
+
 /**
  * Whole Mon–Sun weeks covering `month` ("YYYY-MM"), with the outings per day and per week.
- * Heat is relative within the grid: days to the busiest day, weeks to the busiest week.
+ * Heat is relative to all dated outings so months compare: days to other days, weeks to other weeks (see heatScale).
  */
 export function outingCalendar(month: string, outings: CalendarOuting[]): OutingCalendar {
   const [year, m] = month.split("-").map(Number) as [number, number];
@@ -86,11 +93,24 @@ export function outingCalendar(month: string, outings: CalendarOuting[]): Outing
         heat: 0,
       };
     });
-    weeks.push({ start, days, total: days.reduce((acc, d) => acc + d.total, 0), heat: 0 });
+    weeks.push({
+      start,
+      days,
+      total: days.reduce((acc, d) => acc + d.total, 0),
+      heat: 0,
+    });
   }
 
-  const maxDay = Math.max(0, ...weeks.flatMap((w) => w.days.map((d) => d.total)));
-  const maxWeek = Math.max(0, ...weeks.map((w) => w.total));
+  const dayTotals = new Map<Day, number>();
+  const weekTotals = new Map<Day, number>();
+  for (const outing of outings) {
+    if (outing.date === null) continue;
+    const day = parseDay(outing.date);
+    dayTotals.set(day, (dayTotals.get(day) ?? 0) + outing.total);
+    weekTotals.set(startOfWeek(day), (weekTotals.get(startOfWeek(day)) ?? 0) + outing.total);
+  }
+  const maxDay = heatScale([...dayTotals.values()]);
+  const maxWeek = heatScale([...weekTotals.values()]);
   for (const week of weeks) {
     week.heat = heatLevel(week.total, maxWeek);
     for (const day of week.days) day.heat = heatLevel(day.total, maxDay);

@@ -45,6 +45,43 @@ export default async function OutingsPage({
         Feestjes en avonden uit, met alles wat erbij hoort: ook het ticket van maanden ervoor.
       </p>
 
+      <nav aria-label="Weergave" className="bg-muted inline-flex rounded-lg p-1 text-sm">
+        {views.map((view) => (
+          <Link
+            key={view.label}
+            href={view.href}
+            aria-current={view.list === list ? "page" : undefined}
+            className={cn(
+              "text-muted-foreground hover:text-foreground rounded-md px-3 py-1",
+              view.list === list && "bg-background text-foreground font-medium shadow-sm",
+            )}
+          >
+            {view.label}
+          </Link>
+        ))}
+      </nav>
+
+      {list ? (
+        <OutingList
+          lookups={lookups}
+          linked={linked}
+          recurringNames={new Set(recurring.map((g) => g.name))}
+          today={today}
+        />
+      ) : (
+        <OutingCalendar
+          month={month}
+          current={current}
+          today={todayDay}
+          outings={lookups.outings.map((o) => ({
+            id: o.id,
+            name: o.name,
+            date: o.date,
+            total: totals.get(o.id) ?? 0,
+          }))}
+        />
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Nieuw uitje</CardTitle>
@@ -71,33 +108,6 @@ export default async function OutingsPage({
             </ul>
           </CardContent>
         </Card>
-      )}
-
-      <nav aria-label="Weergave" className="bg-muted inline-flex rounded-lg p-1 text-sm">
-        {views.map((view) => (
-          <Link
-            key={view.label}
-            href={view.href}
-            aria-current={view.list === list ? "page" : undefined}
-            className={cn(
-              "text-muted-foreground hover:text-foreground rounded-md px-3 py-1",
-              view.list === list && "bg-background text-foreground font-medium shadow-sm",
-            )}
-          >
-            {view.label}
-          </Link>
-        ))}
-      </nav>
-
-      {list ? (
-        <OutingList lookups={lookups} linked={linked} recurringNames={new Set(recurring.map((g) => g.name))} today={today} />
-      ) : (
-        <OutingCalendar
-          month={month}
-          current={current}
-          today={todayDay}
-          outings={lookups.outings.map((o) => ({ id: o.id, name: o.name, date: o.date, total: totals.get(o.id) ?? 0 }))}
-        />
       )}
     </>
   );
